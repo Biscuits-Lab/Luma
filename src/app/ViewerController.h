@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include <ui_core.h>
 
@@ -32,11 +33,18 @@ private:
     static void onResize(UiWindow win, int width, int height, void* userdata);
     static void onPinClicked(UiWidget widget, void* userdata);
     static void onFullscreenClicked(UiWidget widget, void* userdata);
+    static void onRecentClicked(UiWidget widget, void* userdata);
     static void onSliderChanged(UiWidget widget, float value, void* userdata);
     static void onViewportChanged(UiWidget widget, float zoom, float panX, float panY, void* userdata);
     static void onDrop(UiWindow win, const wchar_t* path, void* userdata);
 
     void buildUi();
+    void buildHomeUi();
+    void showHome();
+    void showViewer();
+    void loadRecentFiles();
+    void saveRecentFiles() const;
+    void recordRecentFile(const std::filesystem::path& path);
     float calculateFitZoom() const;
     void refreshFitZoom(bool preserveZoomPercent);
     float zoomPercentFromImageZoom(float zoom) const;
@@ -54,6 +62,9 @@ private:
 
     UiWindow window_ = UI_INVALID;
     UiWidget root_ = UI_INVALID;
+    UiWidget contentStack_ = UI_INVALID;
+    UiWidget homeView_ = UI_INVALID;
+    UiWidget recentList_ = UI_INVALID;
     UiWidget imageView_ = UI_INVALID;
     UiWidget titleBar_ = UI_INVALID;
     UiWidget infoLabel_ = UI_INVALID;
@@ -62,6 +73,8 @@ private:
     UiWidget pinButton_ = UI_INVALID;
     UiWidget fullscreenButton_ = UI_INVALID;
 
+    std::vector<std::filesystem::path> recentFiles_;
+    std::vector<std::filesystem::path> recentButtonPaths_;
     std::filesystem::path currentPath_;
     bool updatingSlider_ = false;
     float fitZoom_ = 1.0F;
@@ -75,4 +88,5 @@ private:
 };
 
 } // namespace lumina::app
+
 

@@ -3,10 +3,13 @@
 #include "platform/WindowsStrings.h"
 
 #include <Windows.h>
+#include <ShlObj.h>
 
 #include <algorithm>
 #include <cstring>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 
 namespace lumina::app {
@@ -31,6 +34,28 @@ std::wstring fileNameForDisplay(const std::filesystem::path& path) {
         return L"Lumina Viewer";
     }
     return path.filename().wstring();
+}
+
+std::filesystem::path recentFileStorePath() {
+    PWSTR appDataPath = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_CREATE, nullptr, &appDataPath))) {
+        return std::filesystem::current_path() / L"lumina-recent.txt";
+    }
+
+    std::filesystem::path path(appDataPath);
+    CoTaskMemFree(appDataPath);
+    path /= L"Lumina";
+    std::error_code error;
+    std::filesystem::create_directories(path, error);
+    return path / L"recent.txt";
+}
+
+std::wstring recentButtonText(const std::filesystem::path& path) {
+    const auto parent = path.parent_path().wstring();
+    if (parent.empty()) {
+        return path.filename().wstring();
+    }
+    return path.filename().wstring() + L"  ·  " + parent;
 }
 } // namespace
 
@@ -85,6 +110,12 @@ void ViewerController::buildUi() {
     ui_widget_on_click(pinButton_, &ViewerController::onPinClicked, this);
     ui_titlebar_add_widget(titleBar_, pinButton_);
 
+    contentStack_ = ui_vbox();
+    ui_widget_set_expand(contentStack_, 1);
+    ui_widget_set_gap(contentStack_, 0.0F);
+
+    buildHomeUi();
+
     imageView_ = ui_image_view();
     ui_widget_set_expand(imageView_, 1);
     ui_image_set_zoom_range(imageView_, kMinImageZoom, kMaxZoomPercent / 100.0F);
@@ -125,10 +156,133 @@ void ViewerController::buildUi() {
     ui_widget_add_child(bottomBar, zoomSlider_);
     ui_widget_add_child(bottomBar, fullscreenButton_);
 
+    ui_widget_add_child(contentStack_, homeView_);
+    ui_widget_add_child(contentStack_, imageView_);
+    ui_widget_set_visible(imageView_, 0);
+
     ui_widget_add_child(root_, titleBar_);
-    ui_widget_add_child(root_, imageView_);
+    ui_widget_add_child(root_, contentStack_);
     ui_widget_add_child(root_, bottomBar);
     ui_window_set_root(window_, root_);
+}
+
+
+void ViewerController::buildHomeUi() {
+    loadRecentFiles();
+
+    homeView_ = ui_vbox();
+    ui_widget_set_expand(homeView_, 1);
+    ui_widget_set_padding(homeView_, 42.0F, 46.0F, 42.0F, 28.0F);
+    ui_widget_set_gap(homeView_, 18.0F);
+    ui_widget_set_bg_color(homeView_, rgba(0.055F, 0.055F, 0.06F, 1.0F));
+
+    auto title = ui_label(L"Lumina Viewer");
+    ui_label_set_font_size(title, 28.0F);
+    ui_label_set_bold(title, 1);
+    ui_label_set_text_color(title, rgba(0.96F, 0.96F, 0.98F, 0.96F));
+
+    auto subtitle = ui_label(L"拖入图片开始预览，或从最近打开的图片继续。");
+    ui_label_set_font_size(subtitle, 14.0F);
+    ui_label_set_text_color(subtitle, rgba(0.82F, 0.82F, 0.86F, 0.72F));
+
+    auto recentTitle = ui_label(L"最近打开");
+    ui_label_set_font_size(recentTitle, 16.0F);
+    ui_label_set_bold(recentTitle, 1);
+    ui_label_set_text_color(recentTitle, rgba(0.92F, 0.92F, 0.95F, 0.9F));
+
+    recentList_ = ui_vbox();
+    ui_widget_set_gap(recentList_, 8.0F);
+    ui_widget_set_expand(recentList_, 1);
+    recentButtonPaths_.clear();
+
+    if (recentFiles_.empty()) {
+        auto empty = ui_label(L"暂无最近图片");
+        ui_label_set_font_size(empty, 13.0F);
+        ui_label_set_text_color(empty, rgba(0.76F, 0.76F, 0.8F, 0.64F));
+        ui_widget_add_child(recentList_, empty);
+    } else {
+        const auto count = std::min<std::size_t>(recentFiles_.size(), 8);
+        recentButtonPaths_.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            recentButtonPaths_.push_back(recentFiles_[index]);
+            auto button = ui_button(recentButtonText(recentFiles_[index]).c_str());
+            ui_button_set_font_size(button, 13.0F);
+            ui_button_set_text_color(button, rgba(0.93F, 0.93F, 0.96F, 0.9F));
+            ui_button_set_bg_color(button, rgba(0.12F, 0.12F, 0.14F, 0.88F));
+            ui_widget_set_height(button, 38.0F);
+            ui_widget_set_tooltip(button, recentFiles_[index].wstring().c_str());
+            const auto id = "recent_" + std::to_string(index);
+            ui_widget_set_id(button, id.c_str());
+            ui_widget_on_click(button, &ViewerController::onRecentClicked, this);
+            ui_widget_add_child(recentList_, button);
+        }
+    }
+
+    ui_widget_add_child(homeView_, title);
+    ui_widget_add_child(homeView_, subtitle);
+    ui_widget_add_child(homeView_, ui_spacer(12.0F));
+    ui_widget_add_child(homeView_, recentTitle);
+    ui_widget_add_child(homeView_, recentList_);
+}
+
+void ViewerController::showHome() {
+    ui_widget_set_visible(homeView_, 1);
+    ui_widget_set_visible(imageView_, 0);
+    ui_titlebar_set_title(titleBar_, L"Lumina Viewer");
+    setStatus(L"拖入图片开始预览");
+}
+
+void ViewerController::showViewer() {
+    ui_widget_set_visible(homeView_, 0);
+    ui_widget_set_visible(imageView_, 1);
+}
+
+void ViewerController::loadRecentFiles() {
+    recentFiles_.clear();
+    std::wifstream input(recentFileStorePath());
+    if (!input) {
+        return;
+    }
+
+    std::wstring line;
+    while (std::getline(input, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        std::filesystem::path path(line);
+        if (std::filesystem::exists(path) && decoders_.isSupportedExtension(path.extension().wstring())) {
+            recentFiles_.push_back(path);
+        }
+        if (recentFiles_.size() >= 16) {
+            break;
+        }
+    }
+}
+
+void ViewerController::saveRecentFiles() const {
+    std::wofstream output(recentFileStorePath(), std::ios::trunc);
+    if (!output) {
+        return;
+    }
+
+    for (const auto& path : recentFiles_) {
+        output << path.wstring() << L'\n';
+    }
+}
+
+void ViewerController::recordRecentFile(const std::filesystem::path& path) {
+    const auto absolute = std::filesystem::absolute(path).lexically_normal();
+    recentFiles_.erase(
+        std::remove_if(recentFiles_.begin(), recentFiles_.end(), [&](const auto& existing) {
+            std::error_code error;
+            return std::filesystem::equivalent(existing, absolute, error) || existing == absolute;
+        }),
+        recentFiles_.end());
+    recentFiles_.insert(recentFiles_.begin(), absolute);
+    if (recentFiles_.size() > 16) {
+        recentFiles_.resize(16);
+    }
+    saveRecentFiles();
 }
 
 void ViewerController::show() {
@@ -137,6 +291,7 @@ void ViewerController::show() {
 
 void ViewerController::open(const std::filesystem::path& path) {
     try {
+        showViewer();
         folderIndex_.loadAround(path);
         currentPath_ = path;
         ui_image_set_loading(imageView_, 1);
@@ -144,6 +299,7 @@ void ViewerController::open(const std::filesystem::path& path) {
         const auto result = decoders_.decode(path, image::DecodeOptions{.max_width = 3840, .max_height = 2160});
         applyFrame(result.frame);
         updateMetadata(path, result.frame);
+        recordRecentFile(path);
         if (!result.warning.empty()) {
             ui_toast(window_, result.warning.c_str(), 4500);
         }
@@ -371,6 +527,21 @@ void ViewerController::onFullscreenClicked(UiWidget, void* userdata) {
     self->toggleFullscreen();
 }
 
+
+void ViewerController::onRecentClicked(UiWidget widget, void* userdata) {
+    auto* self = static_cast<ViewerController*>(userdata);
+    if (!self) {
+        return;
+    }
+
+    for (std::size_t index = 0; index < self->recentButtonPaths_.size(); ++index) {
+        const auto expectedWidget = ui_widget_find_by_id(self->recentList_, ("recent_" + std::to_string(index)).c_str());
+        if (expectedWidget == widget) {
+            self->open(self->recentButtonPaths_[index]);
+            return;
+        }
+    }
+}
 void ViewerController::onSliderChanged(UiWidget, float value, void* userdata) {
     auto* self = static_cast<ViewerController*>(userdata);
     if (!self || self->updatingSlider_) {
@@ -395,7 +566,35 @@ void ViewerController::onDrop(UiWindow, const wchar_t* path, void* userdata) {
     self->open(std::filesystem::path(path));
 }
 
+
+std::filesystem::path recentFileStorePath() {
+    PWSTR appDataPath = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_CREATE, nullptr, &appDataPath))) {
+        return std::filesystem::current_path() / L"lumina-recent.txt";
+    }
+
+    std::filesystem::path path(appDataPath);
+    CoTaskMemFree(appDataPath);
+    path /= L"Lumina";
+    std::error_code error;
+    std::filesystem::create_directories(path, error);
+    return path / L"recent.txt";
+}
+
+std::wstring recentButtonText(const std::filesystem::path& path) {
+    const auto parent = path.parent_path().wstring();
+    if (parent.empty()) {
+        return path.filename().wstring();
+    }
+    return path.filename().wstring() + L"  ·  " + parent;
+}
 } // namespace lumina::app
+
+
+
+
+
+
 
 
 

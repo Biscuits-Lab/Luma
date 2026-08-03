@@ -26,6 +26,7 @@ add_executable(lumina-viewer WIN32
     src/app/ViewerController.cpp
     src/image/DecoderRegistry.cpp
     src/image/FolderImageIndex.cpp
+    src/image/ImageAnalysis.cpp
     src/image/PlaceholderDecoder.cpp
     src/image/WicDecoder.cpp
     $<$<BOOL:${LibRaw_FOUND}>:src/image/LibRawDecoder.cpp>
@@ -84,6 +85,7 @@ if(CoreUI_DLL)
             "$<TARGET_FILE_DIR:lumina-viewer>/core-ui.dll"
     )
 endif()
+
 
 
 

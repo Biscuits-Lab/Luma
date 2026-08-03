@@ -44,6 +44,8 @@ Lumina Viewer is a lightweight Windows image previewer prototype. It is designed
 
 ## Current Status
 
+- Details pane includes file information, basic histogram, and current color-management status.
+- Top toolbar includes delete, rotate, favorite, and more/settings placeholder controls.
 This repository currently contains the application skeleton, core-ui viewer shell, and a WIC decoder for common Windows image formats. RAW support is available through LibRaw when the preview script builds the local SDK. EXR support is planned next.
 
 ## Planned Decoder Backends
@@ -101,4 +103,7 @@ The generated executable and runtime files are copied to `output/`. The preview 
 
 
 
+
+
+See docs/color-management.md for the HDR/EXR tone mapping and accurate color-management roadmap.
 

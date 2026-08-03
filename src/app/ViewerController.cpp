@@ -23,6 +23,12 @@ constexpr float kMinImageZoom = 0.001F;
 constexpr const char* kPinIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3l7 7-3 1-4 4 1 5-2 2-5-5-4 4-1-1 4-4-5-5 2-2 5 1 4-4 1-3z"/></svg>)svg";
 constexpr const char* kPinnedIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.4 2.3l7.3 7.3-3.4 1.1-3.7 3.7 1 5.1-2.1 2.1-5.3-5.3-4.1 4.1-.7-.7 4.1-4.1-5.3-5.3 2.1-2.1 5.1 1 3.7-3.7 1.3-3.2z"/></svg>)svg";
 constexpr const char* kFullscreenIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M21 16v5h-5"/><path d="M3 16v5h5"/></svg>)svg";
+constexpr const char* kDeleteIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 15h10l1-15"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>)svg";
+constexpr const char* kRotateIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>)svg";
+constexpr const char* kFavoriteIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.3l-6.2 3.5 1.4-6.9L2 9.2l7-.8L12 2l3 6.4 7 .8-5.2 4.7 1.4 6.9z"/></svg>)svg";
+constexpr const char* kFavoriteFilledIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.3l-6.2 3.5 1.4-6.9L2 9.2l7-.8L12 2l3 6.4 7 .8-5.2 4.7 1.4 6.9z"/></svg>)svg";
+constexpr const char* kMoreIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>)svg";
+constexpr const char* kDetailsIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 10v7"/><path d="M12 7h.01"/></svg>)svg";
 constexpr const char* kExitFullscreenIconSvg = R"svg(<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6H3"/><path d="M15 3v6h6"/><path d="M15 21v-6h6"/><path d="M9 21v-6H3"/></svg>)svg";
 
 UiColor rgba(float r, float g, float b, float a) {
@@ -101,6 +107,44 @@ void ViewerController::buildUi() {
     ui_titlebar_set_title_weight(titleBar_, 500);
     ui_titlebar_set_bg_color(titleBar_, rgba(0.07F, 0.07F, 0.078F, 0.94F));
     ui_widget_set_height(titleBar_, 44.0F);
+    deleteButton_ = ui_icon_button(kDeleteIconSvg, 1);
+    ui_widget_set_size(deleteButton_, 36.0F, 34.0F);
+    ui_icon_button_set_icon_padding(deleteButton_, 8.0F);
+    ui_icon_button_set_icon_color(deleteButton_, rgba(0.86F, 0.86F, 0.89F, 0.78F));
+    ui_widget_set_tooltip(deleteButton_, L"删除");
+    ui_widget_on_click(deleteButton_, &ViewerController::onDeleteClicked, this);
+    ui_titlebar_add_widget(titleBar_, deleteButton_);
+
+    rotateButton_ = ui_icon_button(kRotateIconSvg, 1);
+    ui_widget_set_size(rotateButton_, 36.0F, 34.0F);
+    ui_icon_button_set_icon_padding(rotateButton_, 8.0F);
+    ui_icon_button_set_icon_color(rotateButton_, rgba(0.86F, 0.86F, 0.89F, 0.78F));
+    ui_widget_set_tooltip(rotateButton_, L"旋转");
+    ui_widget_on_click(rotateButton_, &ViewerController::onRotateClicked, this);
+    ui_titlebar_add_widget(titleBar_, rotateButton_);
+
+    favoriteButton_ = ui_icon_button(kFavoriteIconSvg, 1);
+    ui_widget_set_size(favoriteButton_, 36.0F, 34.0F);
+    ui_icon_button_set_icon_padding(favoriteButton_, 8.0F);
+    ui_icon_button_set_icon_color(favoriteButton_, rgba(0.86F, 0.86F, 0.89F, 0.78F));
+    ui_widget_set_tooltip(favoriteButton_, L"收藏");
+    ui_widget_on_click(favoriteButton_, &ViewerController::onFavoriteClicked, this);
+    ui_titlebar_add_widget(titleBar_, favoriteButton_);
+
+    moreButton_ = ui_icon_button(kMoreIconSvg, 1);
+    ui_widget_set_size(moreButton_, 36.0F, 34.0F);
+    ui_icon_button_set_icon_padding(moreButton_, 9.0F);
+    ui_icon_button_set_icon_color(moreButton_, rgba(0.86F, 0.86F, 0.89F, 0.78F));
+    ui_widget_set_tooltip(moreButton_, L"更多");
+    ui_widget_on_click(moreButton_, &ViewerController::onMoreClicked, this);
+    ui_titlebar_add_widget(titleBar_, moreButton_);
+
+    centeredTitleLabel_ = ui_label(L"Lumina Viewer");
+    ui_label_set_align(centeredTitleLabel_, 2);
+    ui_label_set_font_size(centeredTitleLabel_, 13.0F);
+    ui_label_set_text_color(centeredTitleLabel_, rgba(0.92F, 0.92F, 0.95F, 0.9F));
+    ui_widget_set_width(centeredTitleLabel_, 360.0F);
+    ui_titlebar_add_widget(titleBar_, centeredTitleLabel_);
 
     pinButton_ = ui_icon_button(kPinIconSvg, 1);
     ui_widget_set_size(pinButton_, 38.0F, 34.0F);
@@ -144,6 +188,13 @@ void ViewerController::buildUi() {
     ui_widget_set_width(zoomSlider_, 180.0F);
     ui_slider_on_changed(zoomSlider_, &ViewerController::onSliderChanged, this);
 
+
+    detailsButton_ = ui_icon_button(kDetailsIconSvg, 1);
+    ui_widget_set_size(detailsButton_, 36.0F, 32.0F);
+    ui_icon_button_set_icon_padding(detailsButton_, 8.0F);
+    ui_icon_button_set_icon_color(detailsButton_, rgba(0.86F, 0.86F, 0.89F, 0.82F));
+    ui_widget_set_tooltip(detailsButton_, L"详情");
+    ui_widget_on_click(detailsButton_, &ViewerController::onDetailsClicked, this);
     fullscreenButton_ = ui_icon_button(kFullscreenIconSvg, 1);
     ui_widget_set_size(fullscreenButton_, 36.0F, 32.0F);
     ui_icon_button_set_icon_padding(fullscreenButton_, 8.0F);
@@ -151,6 +202,7 @@ void ViewerController::buildUi() {
     ui_widget_set_tooltip(fullscreenButton_, L"全屏");
     ui_widget_on_click(fullscreenButton_, &ViewerController::onFullscreenClicked, this);
 
+    ui_widget_add_child(bottomBar, detailsButton_);
     ui_widget_add_child(bottomBar, infoLabel_);
     ui_widget_add_child(bottomBar, zoomLabel_);
     ui_widget_add_child(bottomBar, zoomSlider_);
@@ -160,13 +212,77 @@ void ViewerController::buildUi() {
     ui_widget_add_child(contentStack_, imageView_);
     ui_widget_set_visible(imageView_, 0);
 
+    buildDetailsPane();
+
+    mainArea_ = ui_hbox();
+    ui_widget_set_expand(mainArea_, 1);
+    ui_widget_set_gap(mainArea_, 0.0F);
+    ui_widget_add_child(mainArea_, contentStack_);
+    ui_widget_add_child(mainArea_, detailsPane_);
+
     ui_widget_add_child(root_, titleBar_);
-    ui_widget_add_child(root_, contentStack_);
+    ui_widget_add_child(root_, mainArea_);
     ui_widget_add_child(root_, bottomBar);
     ui_window_set_root(window_, root_);
 }
 
 
+
+void ViewerController::buildDetailsPane() {
+    detailsPane_ = ui_vbox();
+    ui_widget_set_width(detailsPane_, 320.0F);
+    ui_widget_set_padding(detailsPane_, 18.0F, 18.0F, 18.0F, 18.0F);
+    ui_widget_set_gap(detailsPane_, 12.0F);
+    ui_widget_set_bg_color(detailsPane_, rgba(0.075F, 0.075F, 0.085F, 0.96F));
+    ui_widget_set_visible(detailsPane_, 0);
+
+    auto title = ui_label(L"详细信息");
+    ui_label_set_font_size(title, 18.0F);
+    ui_label_set_bold(title, 1);
+    ui_label_set_text_color(title, rgba(0.96F, 0.96F, 0.98F, 0.96F));
+
+    detailsFileLabel_ = ui_label(L"未打开文件");
+    ui_label_set_font_size(detailsFileLabel_, 13.0F);
+    ui_label_set_wrap(detailsFileLabel_, 1);
+    ui_label_set_text_color(detailsFileLabel_, rgba(0.92F, 0.92F, 0.95F, 0.88F));
+
+    detailsInfoLabel_ = ui_label(L"尺寸：-\n大小：-\n格式：-\n旋转：0°");
+    ui_label_set_font_size(detailsInfoLabel_, 12.0F);
+    ui_label_set_wrap(detailsInfoLabel_, 1);
+    ui_label_set_text_color(detailsInfoLabel_, rgba(0.82F, 0.82F, 0.86F, 0.78F));
+
+    detailsColorLabel_ = ui_label(L"色彩空间：sRGB / WIC 转换\n色彩管理：基础 sRGB 路径\nHDR：待接入 OpenEXR + tone mapping");
+    ui_label_set_font_size(detailsColorLabel_, 12.0F);
+    ui_label_set_wrap(detailsColorLabel_, 1);
+    ui_label_set_text_color(detailsColorLabel_, rgba(0.82F, 0.82F, 0.86F, 0.78F));
+
+    auto histogramTitle = ui_label(L"直方图");
+    ui_label_set_font_size(histogramTitle, 15.0F);
+    ui_label_set_bold(histogramTitle, 1);
+    ui_label_set_text_color(histogramTitle, rgba(0.92F, 0.92F, 0.95F, 0.9F));
+
+    histogramLumaLabel_ = ui_label(L"Y  ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁");
+    histogramRedLabel_ = ui_label(L"R  ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁");
+    histogramGreenLabel_ = ui_label(L"G  ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁");
+    histogramBlueLabel_ = ui_label(L"B  ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁");
+    for (const auto label : {histogramLumaLabel_, histogramRedLabel_, histogramGreenLabel_, histogramBlueLabel_}) {
+        ui_label_set_font_size(label, 14.0F);
+        ui_label_set_text_color(label, rgba(0.86F, 0.86F, 0.89F, 0.86F));
+    }
+
+    ui_widget_add_child(detailsPane_, title);
+    ui_widget_add_child(detailsPane_, detailsFileLabel_);
+    ui_widget_add_child(detailsPane_, ui_separator());
+    ui_widget_add_child(detailsPane_, detailsInfoLabel_);
+    ui_widget_add_child(detailsPane_, ui_separator());
+    ui_widget_add_child(detailsPane_, detailsColorLabel_);
+    ui_widget_add_child(detailsPane_, ui_separator());
+    ui_widget_add_child(detailsPane_, histogramTitle);
+    ui_widget_add_child(detailsPane_, histogramLumaLabel_);
+    ui_widget_add_child(detailsPane_, histogramRedLabel_);
+    ui_widget_add_child(detailsPane_, histogramGreenLabel_);
+    ui_widget_add_child(detailsPane_, histogramBlueLabel_);
+}
 void ViewerController::buildHomeUi() {
     loadRecentFiles();
 
@@ -229,6 +345,7 @@ void ViewerController::showHome() {
     ui_widget_set_visible(homeView_, 1);
     ui_widget_set_visible(imageView_, 0);
     ui_titlebar_set_title(titleBar_, L"Lumina Viewer");
+    ui_label_set_text(centeredTitleLabel_, L"Lumina Viewer");
     setStatus(L"拖入图片开始预览");
 }
 
@@ -474,13 +591,71 @@ void ViewerController::applyFrame(const image::ImageFrame& frame) {
     ui_image_set_loading(imageView_, 0);
 }
 
+
+void ViewerController::toggleDetailsPane() {
+    detailsVisible_ = !detailsVisible_;
+    ui_widget_set_visible(detailsPane_, detailsVisible_ ? 1 : 0);
+    ui_icon_button_set_icon_color(detailsButton_, detailsVisible_ ? rgba(0.56F, 0.74F, 1.0F, 1.0F) : rgba(0.86F, 0.86F, 0.89F, 0.82F));
+}
+
+void ViewerController::updateDetailsPane(const std::filesystem::path& path, const image::ImageFrame& frame) {
+    currentFileSize_ = platform::fileSizeOrZero(path);
+    ui_label_set_text(detailsFileLabel_, path.wstring().c_str());
+
+    const auto info = std::format(
+        L"尺寸：{} × {}\n大小：{}\n格式：{}\n旋转：{}°",
+        frame.width,
+        frame.height,
+        platform::formatFileSize(currentFileSize_),
+        path.extension().wstring(),
+        rotationDegrees_);
+    ui_label_set_text(detailsInfoLabel_, info.c_str());
+
+    const auto color = std::format(
+        L"色彩空间：{}\n色彩管理：{}\nHDR/EXR：{}",
+        L"sRGB working space",
+        L"WIC/LibRaw → BGRA8 preview path",
+        L"OpenEXR + tone mapping planned");
+    ui_label_set_text(detailsColorLabel_, color.c_str());
+
+    const auto analysis = image::analyzeImage(frame);
+    ui_label_set_text(histogramLumaLabel_, (L"Y  " + image::formatHistogramBars(analysis.luminance, analysis.max_bin)).c_str());
+    ui_label_set_text(histogramRedLabel_, (L"R  " + image::formatHistogramBars(analysis.red, analysis.max_bin)).c_str());
+    ui_label_set_text(histogramGreenLabel_, (L"G  " + image::formatHistogramBars(analysis.green, analysis.max_bin)).c_str());
+    ui_label_set_text(histogramBlueLabel_, (L"B  " + image::formatHistogramBars(analysis.blue, analysis.max_bin)).c_str());
+}
+
+void ViewerController::rotateCurrentImage() {
+    rotationDegrees_ = (rotationDegrees_ + 90) % 360;
+    ui_image_set_rotation(imageView_, rotationDegrees_);
+    if (!currentPath_.empty()) {
+        const auto info = std::format(
+            L"尺寸：{} × {}\n大小：{}\n格式：{}\n旋转：{}°",
+            ui_image_width(imageView_),
+            ui_image_height(imageView_),
+            platform::formatFileSize(currentFileSize_),
+            currentPath_.extension().wstring(),
+            rotationDegrees_);
+        ui_label_set_text(detailsInfoLabel_, info.c_str());
+    }
+}
+
+void ViewerController::toggleFavorite() {
+    favorite_ = !favorite_;
+    ui_icon_button_set_svg(favoriteButton_, favorite_ ? kFavoriteFilledIconSvg : kFavoriteIconSvg);
+    ui_icon_button_set_icon_color(favoriteButton_, favorite_ ? rgba(1.0F, 0.78F, 0.28F, 1.0F) : rgba(0.86F, 0.86F, 0.89F, 0.78F));
+    ui_widget_set_tooltip(favoriteButton_, favorite_ ? L"取消收藏" : L"收藏");
+}
 void ViewerController::updateMetadata(const std::filesystem::path& path, const image::ImageFrame& frame) {
     ui_window_set_title(window_, fileNameForDisplay(path).c_str());
     ui_titlebar_set_title(titleBar_, fileNameForDisplay(path).c_str());
+    ui_label_set_text(centeredTitleLabel_, fileNameForDisplay(path).c_str());
 
-    const auto fileSize = platform::formatFileSize(platform::fileSizeOrZero(path));
+    currentFileSize_ = platform::fileSizeOrZero(path);
+    const auto fileSize = platform::formatFileSize(currentFileSize_);
     const auto info = std::format(L"{} × {} · {}", frame.width, frame.height, fileSize);
     ui_label_set_text(infoLabel_, info.c_str());
+    updateDetailsPane(path, frame);
     updateViewport(ui_image_get_zoom(imageView_));
 }
 
@@ -528,6 +703,41 @@ void ViewerController::onFullscreenClicked(UiWidget, void* userdata) {
 }
 
 
+
+void ViewerController::onDetailsClicked(UiWidget, void* userdata) {
+    auto* self = static_cast<ViewerController*>(userdata);
+    if (self) {
+        self->toggleDetailsPane();
+    }
+}
+
+void ViewerController::onDeleteClicked(UiWidget, void* userdata) {
+    auto* self = static_cast<ViewerController*>(userdata);
+    if (self) {
+        ui_toast(self->window_, L"删除功能将添加确认对话框后启用", 2600);
+    }
+}
+
+void ViewerController::onRotateClicked(UiWidget, void* userdata) {
+    auto* self = static_cast<ViewerController*>(userdata);
+    if (self) {
+        self->rotateCurrentImage();
+    }
+}
+
+void ViewerController::onFavoriteClicked(UiWidget, void* userdata) {
+    auto* self = static_cast<ViewerController*>(userdata);
+    if (self) {
+        self->toggleFavorite();
+    }
+}
+
+void ViewerController::onMoreClicked(UiWidget, void* userdata) {
+    auto* self = static_cast<ViewerController*>(userdata);
+    if (self) {
+        ui_toast(self->window_, L"设置入口已预留：下一步接入设置面板", 2600);
+    }
+}
 void ViewerController::onRecentClicked(UiWidget widget, void* userdata) {
     auto* self = static_cast<ViewerController*>(userdata);
     if (!self) {
@@ -589,6 +799,13 @@ std::wstring recentButtonText(const std::filesystem::path& path) {
     return path.filename().wstring() + L"  ·  " + parent;
 }
 } // namespace lumina::app
+
+
+
+
+
+
+
 
 
 

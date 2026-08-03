@@ -20,7 +20,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(CoreUI REQUIRED)
 find_package(LibRaw QUIET)
 
-add_executable(lumina-viewer WIN32
+add_executable(Lumina WIN32
     src/main.cpp
     src/app/Application.cpp
     src/app/ViewerController.cpp
@@ -33,18 +33,18 @@ add_executable(lumina-viewer WIN32
     src/platform/WindowsStrings.cpp
 )
 
-target_include_directories(lumina-viewer PRIVATE
+target_include_directories(Lumina PRIVATE
     src
 )
 
-target_link_libraries(lumina-viewer PRIVATE
+target_link_libraries(Lumina PRIVATE
     CoreUI::CoreUI
     Shell32
     Ole32
     Windowscodecs
 )
 
-target_compile_definitions(lumina-viewer PRIVATE
+target_compile_definitions(Lumina PRIVATE
     UNICODE
     _UNICODE
     NOMINMAX
@@ -52,39 +52,40 @@ target_compile_definitions(lumina-viewer PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(lumina-viewer PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(Lumina PRIVATE /W4 /permissive- /utf-8)
 else()
-    target_compile_options(lumina-viewer PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(Lumina PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-add_custom_command(TARGET lumina-viewer POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:lumina-viewer>/ui"
+add_custom_command(TARGET Lumina POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Lumina>/ui"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/ui/main.uix"
-        "$<TARGET_FILE_DIR:lumina-viewer>/ui/main.uix"
+        "$<TARGET_FILE_DIR:Lumina>/ui/main.uix"
 )
 
 
 if(LibRaw_FOUND)
-    target_link_libraries(lumina-viewer PRIVATE LibRaw::LibRaw)
-    target_compile_definitions(lumina-viewer PRIVATE LUMINA_ENABLE_LIBRAW=1)
+    target_link_libraries(Lumina PRIVATE LibRaw::LibRaw)
+    target_compile_definitions(Lumina PRIVATE LUMINA_ENABLE_LIBRAW=1)
     if(LibRaw_DLL)
-        add_custom_command(TARGET lumina-viewer POST_BUILD
+        add_custom_command(TARGET Lumina POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${LibRaw_DLL}"
-                "$<TARGET_FILE_DIR:lumina-viewer>"
+                "$<TARGET_FILE_DIR:Lumina>"
         )
     endif()
 else()
     message(STATUS "LibRaw not found; RAW formats will use placeholder decoder")
 endif()
 if(CoreUI_DLL)
-    add_custom_command(TARGET lumina-viewer POST_BUILD
+    add_custom_command(TARGET Lumina POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CoreUI_DLL}"
-            "$<TARGET_FILE_DIR:lumina-viewer>/core-ui.dll"
+            "$<TARGET_FILE_DIR:Lumina>/core-ui.dll"
     )
 endif()
+
 
 
 

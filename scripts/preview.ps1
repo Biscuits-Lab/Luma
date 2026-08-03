@@ -267,8 +267,8 @@ function Build-Lumina([string]$CMake, [string]$VsPath, [string]$CoreSdkRoot, [st
     )
     Set-Content -LiteralPath $cmdFile -Value $cmdLines -Encoding ASCII
     Run 'cmd.exe' @('/d', '/c', $cmdFile) 'Lumina build failed.'
-    $exe = Join-Path $OutputDir 'lumina-viewer.exe'
-    if (-not (Test-Path $exe)) { throw 'Build finished but output\lumina-viewer.exe was not found.' }
+    $exe = Join-Path $OutputDir 'Lumina.exe'
+    if (-not (Test-Path $exe)) { throw 'Build finished but output\Lumina.exe was not found.' }
     Ok "Lumina: $exe"
     return $exe
 }
@@ -302,6 +302,7 @@ try {
     if ($KeepOpen) { Read-Host 'Press Enter to close' | Out-Null }
     exit 1
 }
+
 
 
 

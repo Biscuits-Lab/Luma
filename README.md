@@ -8,7 +8,7 @@ Run the bootstrap preview script from PowerShell:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/preview.ps1 -KeepOpen
 ```
 
-The script checks Git, CMake, Visual Studio C++ Build Tools, LLVM, and `core-ui`. When a dependency is missing, it attempts to install it with `winget`, builds `core-ui`, builds Lumina, writes the packaged executable to `output\lumina-viewer.exe`, and launches the app.
+The script checks Git, CMake, Visual Studio C++ Build Tools, LLVM, and `core-ui`. When a dependency is missing, it attempts to install it with `winget`, builds `core-ui`, builds Lumina, writes the packaged executable to `output\Lumina.exe`, and launches the app.
 
 Use `-KeepOpen` when double-clicking or launching from a temporary terminal so errors remain visible. Full logs are written to `output\preview.log`.
 
@@ -106,5 +106,6 @@ The generated executable and runtime files are copied to `output/`. The preview 
 
 
 See docs/color-management.md for the HDR/EXR tone mapping and accurate color-management roadmap.
+
 
 

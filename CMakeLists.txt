@@ -1,6 +1,9 @@
 ﻿cmake_minimum_required(VERSION 3.25)
 
 project(LuminaViewer VERSION 0.1.0 LANGUAGES CXX)
+if(POLICY CMP0144)
+    cmake_policy(SET CMP0144 NEW)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,6 +18,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${LUMINA_OUTPUT_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 find_package(CoreUI REQUIRED)
+find_package(LibRaw QUIET)
 
 add_executable(lumina-viewer WIN32
     src/main.cpp
@@ -24,6 +28,7 @@ add_executable(lumina-viewer WIN32
     src/image/FolderImageIndex.cpp
     src/image/PlaceholderDecoder.cpp
     src/image/WicDecoder.cpp
+    $<$<BOOL:${LibRaw_FOUND}>:src/image/LibRawDecoder.cpp>
     src/platform/WindowsStrings.cpp
 )
 
@@ -58,6 +63,20 @@ add_custom_command(TARGET lumina-viewer POST_BUILD
         "$<TARGET_FILE_DIR:lumina-viewer>/ui/main.uix"
 )
 
+
+if(LibRaw_FOUND)
+    target_link_libraries(lumina-viewer PRIVATE LibRaw::LibRaw)
+    target_compile_definitions(lumina-viewer PRIVATE LUMINA_ENABLE_LIBRAW=1)
+    if(LibRaw_DLL)
+        add_custom_command(TARGET lumina-viewer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${LibRaw_DLL}"
+                "$<TARGET_FILE_DIR:lumina-viewer>"
+        )
+    endif()
+else()
+    message(STATUS "LibRaw not found; RAW formats will use placeholder decoder")
+endif()
 if(CoreUI_DLL)
     add_custom_command(TARGET lumina-viewer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -65,6 +84,10 @@ if(CoreUI_DLL)
             "$<TARGET_FILE_DIR:lumina-viewer>/core-ui.dll"
     )
 endif()
+
+
+
+
 
 
 

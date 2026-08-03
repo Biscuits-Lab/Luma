@@ -44,12 +44,12 @@ Lumina Viewer is a lightweight Windows image previewer prototype. It is designed
 
 ## Current Status
 
-This repository currently contains the application skeleton, core-ui viewer shell, and a WIC decoder for common Windows image formats. RAW and EXR support are planned next.
+This repository currently contains the application skeleton, core-ui viewer shell, and a WIC decoder for common Windows image formats. RAW support is available through LibRaw when the preview script builds the local SDK. EXR support is planned next.
 
 ## Planned Decoder Backends
 
 - WIC implemented: `jpg`, `jpeg`, `png`, `bmp`, `gif`, `tif`, `tiff`, plus `webp`, `heic`, `heif`, `avif` when Windows has matching WIC codecs.
-- LibRaw: `nef`, `cr2`, `cr3`, `arw`, `orf`, `rw2`, `dng`.
+- LibRaw implemented: `nef`, `nrw`, `dng`, `cr2`, `cr3`, `arw`, `srf`, `sr2`, `orf`, `rw2`, `raf`.
 - OpenEXR: `exr`, `hdr` tone-mapped into displayable BGRA pixels.
 - Optional fallback: `libvips` or ImageMagick for uncommon formats.
 
@@ -95,6 +95,7 @@ core-ui-sdk/
 ```
 
 The generated executable and runtime files are copied to `output/`. The preview script writes logs to `output/preview.log`.
+
 
 
 

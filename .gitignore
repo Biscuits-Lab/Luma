@@ -4,16 +4,21 @@ out/
 output/
 .vs/
 
-# User-local dependency drops
 # Downloadable third-party dependencies
+third_party/core-ui/
 third_party/core-ui-src/
 third_party/core-ui-sdk/
 third_party/core-ui-zip/
 third_party/core-ui-main.zip
-third_party/core-ui/
-!third_party/README.mdthird_party/core-ui/bin/
-third_party/core-ui/lib/
-third_party/core-ui/include/
+third_party/libraw-src/
+third_party/libraw-cmake-src/
+third_party/libraw-build/
+third_party/libraw-sdk/
+third_party/libraw-main.zip
+third_party/libraw-main-zip/
+third_party/libraw-cmake-main.zip
+third_party/libraw-cmake-main-zip/
+!third_party/README.md
 
 # Windows/Visual Studio
 *.user
@@ -28,5 +33,3 @@ third_party/core-ui/include/
 *.ilk
 *.obj
 *.lib
-
-

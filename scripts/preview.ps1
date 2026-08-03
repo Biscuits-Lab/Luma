@@ -6,7 +6,8 @@ param(
     [switch]$NoRun,
     [switch]$KeepOpen,
     [string]$Image,
-    [string]$CoreUiRoot
+    [string]$CoreUiRoot,
+    [string]$LibRawRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,6 +20,9 @@ $OutputDir = Join-Path $RepoRoot 'output'
 $LogFile = Join-Path $OutputDir 'preview.log'
 $CoreUiSource = if ($CoreUiRoot) { $CoreUiRoot } else { Join-Path $ThirdParty 'core-ui-src' }
 $CoreUiSdk = Join-Path $ThirdParty 'core-ui-sdk'
+$LibRawSource = if ($LibRawRoot) { $LibRawRoot } else { Join-Path $ThirdParty 'libraw-src' }
+$LibRawCmakeSource = Join-Path $ThirdParty 'libraw-cmake-src'
+$LibRawSdk = Join-Path $ThirdParty 'libraw-sdk'
 
 function Init-Log {
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -34,6 +38,7 @@ function Run([string]$Exe, [string[]]$RunArgs, [string]$Fail, [string]$Cwd = '')
     Log "> $line"
     if ($Cwd) { Push-Location $Cwd }
     try {
+        $global:LASTEXITCODE = 0
         $nativeOutput = & $Exe @RunArgs 2>&1
         $exitCode = $LASTEXITCODE
         if ($nativeOutput) {
@@ -184,7 +189,69 @@ function Ensure-CoreUi([string]$Git, [string]$CMake, [string]$VsPath, [string]$C
     return Package-CoreUi $CoreUiSource
 }
 
-function Build-Lumina([string]$CMake, [string]$VsPath, [string]$SdkRoot) {
+function Is-LibRawSdk([string]$Path) {
+    return $Path -and (Test-Path (Join-Path $Path 'include\libraw\libraw.h')) -and (Get-ChildItem -Path (Join-Path $Path 'lib') -Filter '*raw*.lib' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+
+function Download-ZipRepo([string]$Url, [string]$Dest, [string]$Name) {
+    Step "Downloading $Name zip"
+    $zip = Join-Path $ThirdParty "$Name.zip"
+    $extract = Join-Path $ThirdParty "$Name-zip"
+    if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
+    if (Test-Path $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+    Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
+    Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+    $folder = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
+    if (-not $folder) { throw "$Name zip did not contain a folder." }
+    if (Test-Path $Dest) { Remove-Item -LiteralPath $Dest -Recurse -Force }
+    Move-Item -LiteralPath $folder.FullName -Destination $Dest
+}
+
+function Ensure-LibRaw([string]$Git, [string]$CMake, [string]$VsPath) {
+    Step 'Checking LibRaw SDK'
+    if (Is-LibRawSdk $LibRawSource) { Ok "LibRaw SDK: $LibRawSource"; return $LibRawSource }
+    if (Is-LibRawSdk $LibRawSdk) { Ok "LibRaw SDK: $LibRawSdk"; return $LibRawSdk }
+
+    New-Item -ItemType Directory -Force -Path $ThirdParty | Out-Null
+    if (-not (Test-Path $LibRawSource)) {
+        Step 'Cloning LibRaw'
+        try { Run $Git @('clone', '--depth', '1', 'https://github.com/LibRaw/LibRaw.git', $LibRawSource) 'Failed to clone LibRaw.' }
+        catch { Warn "LibRaw git clone failed: $($_.Exception.Message)"; Download-ZipRepo 'https://github.com/LibRaw/LibRaw/archive/refs/heads/master.zip' $LibRawSource 'libraw-main' }
+    } else { Ok "LibRaw source exists: $LibRawSource" }
+
+    if (-not (Test-Path $LibRawCmakeSource)) {
+        Step 'Cloning LibRaw-cmake'
+        try { Run $Git @('clone', '--depth', '1', 'https://github.com/LibRaw/LibRaw-cmake.git', $LibRawCmakeSource) 'Failed to clone LibRaw-cmake.' }
+        catch { Warn "LibRaw-cmake git clone failed: $($_.Exception.Message)"; Download-ZipRepo 'https://github.com/LibRaw/LibRaw-cmake/archive/refs/heads/master.zip' $LibRawCmakeSource 'libraw-cmake-main' }
+    } else { Ok "LibRaw-cmake source exists: $LibRawCmakeSource" }
+
+    Step 'Copying LibRaw CMake support files'
+    Copy-Item -Path (Join-Path $LibRawCmakeSource '*') -Destination $LibRawSource -Recurse -Force
+
+    Step 'Building LibRaw'
+    $librawBuild = Join-Path $ThirdParty 'libraw-build'
+    $librawInstall = $LibRawSdk
+    if (Test-Path $librawBuild) { Remove-Item -LiteralPath $librawBuild -Recurse -Force }
+    if (Test-Path $librawInstall) { Remove-Item -LiteralPath $librawInstall -Recurse -Force }
+    $vcvars = Join-Path $VsPath 'Common7\Tools\VsDevCmd.bat'
+    $cmdFile = Join-Path $OutputDir 'build-libraw.cmd'
+    $cmdLines = @(
+        '@echo off',
+        "call `"$vcvars`" -arch=x64 -host_arch=x64",
+        "if errorlevel 1 exit /b %errorlevel%",
+        "`"$CMake`" -S `"$LibRawSource`" -B `"$librawBuild`" -DCMAKE_INSTALL_PREFIX=`"$librawInstall`" -DBUILD_SHARED_LIBS=ON -DENABLE_OPENMP=OFF -DENABLE_LCMS=OFF -DENABLE_JASPER=OFF -DENABLE_EXAMPLES=OFF -DENABLE_RAWSPEED=OFF -DENABLE_X3FTOOLS=OFF -DENABLE_6BY9RPI=OFF -DLIBRAW_INSTALL=ON",
+        "if errorlevel 1 exit /b %errorlevel%",
+        "`"$CMake`" --build `"$librawBuild`" --config Release --target install",
+        "if errorlevel 1 exit /b %errorlevel%"
+    )
+    Set-Content -LiteralPath $cmdFile -Value $cmdLines -Encoding ASCII
+    Run 'cmd.exe' @('/d', '/c', $cmdFile) 'LibRaw build failed.'
+
+    if (-not (Is-LibRawSdk $LibRawSdk)) { throw 'LibRaw SDK files were not found after install.' }
+    Ok "LibRaw SDK: $LibRawSdk"
+    return $LibRawSdk
+}
+function Build-Lumina([string]$CMake, [string]$VsPath, [string]$CoreSdkRoot, [string]$RawSdkRoot) {
     Step 'Building Lumina Viewer'
     if ($Clean -and (Test-Path $BuildDir)) { Remove-Item -LiteralPath $BuildDir -Recurse -Force }
     $vcvars = Join-Path $VsPath 'Common7\Tools\VsDevCmd.bat'
@@ -193,7 +260,7 @@ function Build-Lumina([string]$CMake, [string]$VsPath, [string]$SdkRoot) {
         '@echo off',
         "call `"$vcvars`" -arch=x64 -host_arch=x64",
         "if errorlevel 1 exit /b %errorlevel%",
-        "`"$CMake`" -S `"$RepoRoot`" -B `"$BuildDir`" -DCORE_UI_ROOT=`"$SdkRoot`" -DLUMINA_OUTPUT_DIR=`"$OutputDir`"",
+        "`"$CMake`" -S `"$RepoRoot`" -B `"$BuildDir`" -DCORE_UI_ROOT=`"$CoreSdkRoot`" -DLIBRAW_ROOT=`"$RawSdkRoot`" -DLUMINA_OUTPUT_DIR=`"$OutputDir`"",
         "if errorlevel 1 exit /b %errorlevel%",
         "`"$CMake`" --build `"$BuildDir`" --config Release",
         "if errorlevel 1 exit /b %errorlevel%"
@@ -219,7 +286,8 @@ try {
     $vs = Ensure-VS
     $clang = Ensure-LLVM
     $sdk = Ensure-CoreUi $git $cmake $vs $clang
-    $exe = Build-Lumina $cmake $vs $sdk
+    $rawSdk = Ensure-LibRaw $git $cmake $vs
+    $exe = Build-Lumina $cmake $vs $sdk $rawSdk
     if (-not $NoRun) {
         Step 'Launching preview'
         if ($Image) { Start-Process -FilePath $exe -ArgumentList @($Image) } else { Start-Process -FilePath $exe }
@@ -234,5 +302,10 @@ try {
     if ($KeepOpen) { Read-Host 'Press Enter to close' | Out-Null }
     exit 1
 }
+
+
+
+
+
 
 

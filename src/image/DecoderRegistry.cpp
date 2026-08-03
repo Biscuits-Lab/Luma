@@ -2,6 +2,9 @@
 
 #include "image/PlaceholderDecoder.h"
 #include "image/WicDecoder.h"
+#ifdef LUMINA_ENABLE_LIBRAW
+#include "image/LibRawDecoder.h"
+#endif
 
 #include <algorithm>
 #include <cwctype>
@@ -50,10 +53,15 @@ bool DecoderRegistry::isSupportedExtension(std::wstring_view extension) const {
 DecoderRegistry DecoderRegistry::createDefault() {
     DecoderRegistry registry;
     registry.add(std::make_unique<WicDecoder>());
+#ifdef LUMINA_ENABLE_LIBRAW
+    registry.add(std::make_unique<LibRawDecoder>());
+#endif
     registry.add(std::make_unique<PlaceholderDecoder>());
     return registry;
 }
 
 } // namespace lumina::image
+
+
 
 

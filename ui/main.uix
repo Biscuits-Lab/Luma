@@ -1,0 +1,86 @@
+﻿<window title="Lumina Viewer" width="1280" height="820" centered="true" theme="dark" />
+
+<script>
+export default {
+  data() {
+    return {
+      fileName: 'Lumina Viewer',
+      imageInfo: 'Open an image to preview',
+      zoom: 100
+    };
+  },
+  methods: {
+    onZoomChanged(value) {
+      this.zoom = value;
+    }
+  }
+}
+</script>
+
+<style>
+.root {
+  background: #0e0e10;
+  color: #f4f4f5;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.topbar {
+  height: 44px;
+  padding: 10px 16px 8px 16px;
+  align-items: center;
+  justify-content: center;
+  background: rgba(18, 18, 20, 0.82);
+}
+
+.filename {
+  font-size: 13px;
+  color: rgba(245, 245, 247, 0.88);
+  font-weight: 500;
+}
+
+.viewer {
+  flex: 1;
+  background: #101014;
+}
+
+.bottombar {
+  height: 54px;
+  padding: 8px 18px 12px 18px;
+  gap: 12px;
+  align-items: center;
+  background: rgba(18, 18, 20, 0.92);
+}
+
+.info {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(235, 235, 240, 0.82);
+}
+
+.zoomText {
+  width: 56px;
+  text-align: right;
+  font-size: 12px;
+  color: rgba(235, 235, 240, 0.82);
+}
+
+.zoomSlider {
+  width: 180px;
+}
+</style>
+
+<template>
+  <div class="root">
+    <div class="topbar">
+      <label class="filename">{{ fileName }}</label>
+    </div>
+    <ImageView id="imageView" class="viewer" expand="true" />
+    <div class="bottombar">
+      <label class="info">{{ imageInfo }}</label>
+      <label class="zoomText">{{ Math.round(zoom) }}%</label>
+      <Slider class="zoomSlider" min="10" max="800" v-model="zoom" @changed="onZoomChanged" />
+    </div>
+  </div>
+</template>

@@ -1,0 +1,32 @@
+﻿# Build output
+build/
+out/
+output/
+.vs/
+
+# User-local dependency drops
+# Downloadable third-party dependencies
+third_party/core-ui-src/
+third_party/core-ui-sdk/
+third_party/core-ui-zip/
+third_party/core-ui-main.zip
+third_party/core-ui/
+!third_party/README.mdthird_party/core-ui/bin/
+third_party/core-ui/lib/
+third_party/core-ui/include/
+
+# Windows/Visual Studio
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# Runtime artifacts
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.obj
+*.lib
+
+

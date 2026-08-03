@@ -37,7 +37,7 @@ UiColor rgba(float r, float g, float b, float a) {
 
 std::wstring fileNameForDisplay(const std::filesystem::path& path) {
     if (path.empty()) {
-        return L"Lumina Viewer";
+        return L"Lumina";
     }
     return path.filename().wstring();
 }
@@ -77,7 +77,7 @@ ViewerController::~ViewerController() {
 
 bool ViewerController::createWindow() {
     UiWindowConfig config{};
-    config.title = L"Lumina Viewer";
+    config.title = L"Lumina";
     config.width = 1280;
     config.height = 820;
     config.system_frame = 0;
@@ -101,7 +101,7 @@ void ViewerController::buildUi() {
     ui_widget_set_bg_color(root_, rgba(0.055F, 0.055F, 0.06F, 1.0F));
     ui_widget_set_gap(root_, 0.0F);
 
-    titleBar_ = ui_titlebar(L"Lumina Viewer");
+    titleBar_ = ui_titlebar(L"Lumina");
     ui_titlebar_show_buttons(titleBar_, 1, 1, 1);
     ui_titlebar_show_icon(titleBar_, 0);
     ui_titlebar_set_title_weight(titleBar_, 500);
@@ -139,7 +139,7 @@ void ViewerController::buildUi() {
     ui_widget_on_click(moreButton_, &ViewerController::onMoreClicked, this);
     ui_titlebar_add_widget(titleBar_, moreButton_);
 
-    centeredTitleLabel_ = ui_label(L"Lumina Viewer");
+    centeredTitleLabel_ = ui_label(L"Lumina");
     ui_label_set_align(centeredTitleLabel_, 2);
     ui_label_set_font_size(centeredTitleLabel_, 13.0F);
     ui_label_set_text_color(centeredTitleLabel_, rgba(0.92F, 0.92F, 0.95F, 0.9F));
@@ -292,7 +292,7 @@ void ViewerController::buildHomeUi() {
     ui_widget_set_gap(homeView_, 18.0F);
     ui_widget_set_bg_color(homeView_, rgba(0.055F, 0.055F, 0.06F, 1.0F));
 
-    auto title = ui_label(L"Lumina Viewer");
+    auto title = ui_label(L"Lumina");
     ui_label_set_font_size(title, 28.0F);
     ui_label_set_bold(title, 1);
     ui_label_set_text_color(title, rgba(0.96F, 0.96F, 0.98F, 0.96F));
@@ -344,8 +344,8 @@ void ViewerController::buildHomeUi() {
 void ViewerController::showHome() {
     ui_widget_set_visible(homeView_, 1);
     ui_widget_set_visible(imageView_, 0);
-    ui_titlebar_set_title(titleBar_, L"Lumina Viewer");
-    ui_label_set_text(centeredTitleLabel_, L"Lumina Viewer");
+    ui_titlebar_set_title(titleBar_, L"Lumina");
+    ui_label_set_text(centeredTitleLabel_, L"Lumina");
     setStatus(L"拖入图片开始预览");
 }
 
@@ -799,6 +799,7 @@ std::wstring recentButtonText(const std::filesystem::path& path) {
     return path.filename().wstring() + L"  ·  " + parent;
 }
 } // namespace lumina::app
+
 
 
 

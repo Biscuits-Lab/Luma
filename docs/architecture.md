@@ -1,8 +1,8 @@
-﻿# Lumina Viewer Architecture
+﻿# Lumina Architecture
 
 ## Product Shape
 
-Lumina Viewer is a native Windows image previewer focused on quick one-file launch and folder navigation. The UI is intentionally minimal: image canvas first, subtle metadata overlays, and a compact zoom control.
+Lumina is a native Windows image previewer focused on quick one-file launch and folder navigation. The UI is intentionally minimal: image canvas first, subtle metadata overlays, and a compact zoom control.
 
 ## Layers
 
@@ -60,3 +60,4 @@ Pixel contract:
 - `Right` opens the next image in folder order.
 - Slider changes set image zoom directly.
 - Viewport callback updates the slider and percentage text.
+

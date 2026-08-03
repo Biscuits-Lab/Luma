@@ -1,6 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.25)
 
-project(LuminaViewer VERSION 0.1.0 LANGUAGES CXX)
+project(Lumina VERSION 0.1.0 LANGUAGES CXX)
 if(POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)
 endif()
@@ -85,6 +85,7 @@ if(CoreUI_DLL)
             "$<TARGET_FILE_DIR:lumina-viewer>/core-ui.dll"
     )
 endif()
+
 
 
 

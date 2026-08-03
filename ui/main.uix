@@ -1,10 +1,10 @@
-﻿<window title="Lumina Viewer" width="1280" height="820" centered="true" theme="dark" />
+﻿<window title="Lumina" width="1280" height="820" centered="true" theme="dark" />
 
 <script>
 export default {
   data() {
     return {
-      fileName: 'Lumina Viewer',
+      fileName: 'Lumina',
       imageInfo: 'Open an image to preview',
       zoom: 100
     };
@@ -84,3 +84,4 @@ export default {
     </div>
   </div>
 </template>
+

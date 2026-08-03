@@ -1,4 +1,4 @@
-﻿<# Lumina Viewer preview bootstrap. Outputs to ./output. #>
+﻿<# Lumina preview bootstrap. Outputs to ./output. #>
 [CmdletBinding()]
 param(
     [switch]$Clean,
@@ -252,7 +252,7 @@ function Ensure-LibRaw([string]$Git, [string]$CMake, [string]$VsPath) {
     return $LibRawSdk
 }
 function Build-Lumina([string]$CMake, [string]$VsPath, [string]$CoreSdkRoot, [string]$RawSdkRoot) {
-    Step 'Building Lumina Viewer'
+    Step 'Building Lumina'
     if ($Clean -and (Test-Path $BuildDir)) { Remove-Item -LiteralPath $BuildDir -Recurse -Force }
     $vcvars = Join-Path $VsPath 'Common7\Tools\VsDevCmd.bat'
     $cmdFile = Join-Path $OutputDir 'build-lumina.cmd'
@@ -269,7 +269,7 @@ function Build-Lumina([string]$CMake, [string]$VsPath, [string]$CoreSdkRoot, [st
     Run 'cmd.exe' @('/d', '/c', $cmdFile) 'Lumina build failed.'
     $exe = Join-Path $OutputDir 'lumina-viewer.exe'
     if (-not (Test-Path $exe)) { throw 'Build finished but output\lumina-viewer.exe was not found.' }
-    Ok "Lumina Viewer: $exe"
+    Ok "Lumina: $exe"
     return $exe
 }
 
@@ -302,6 +302,7 @@ try {
     if ($KeepOpen) { Read-Host 'Press Enter to close' | Out-Null }
     exit 1
 }
+
 
 
 

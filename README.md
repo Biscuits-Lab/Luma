@@ -1,4 +1,4 @@
-﻿# Lumina Viewer
+﻿# Lumina
 
 ## Quick Preview
 
@@ -8,7 +8,7 @@ Run the bootstrap preview script from PowerShell:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/preview.ps1 -KeepOpen
 ```
 
-The script checks Git, CMake, Visual Studio C++ Build Tools, LLVM, and `core-ui`. When a dependency is missing, it attempts to install it with `winget`, builds `core-ui`, builds Lumina Viewer, writes the packaged executable to `output\lumina-viewer.exe`, and launches the app.
+The script checks Git, CMake, Visual Studio C++ Build Tools, LLVM, and `core-ui`. When a dependency is missing, it attempts to install it with `winget`, builds `core-ui`, builds Lumina, writes the packaged executable to `output\lumina-viewer.exe`, and launches the app.
 
 Use `-KeepOpen` when double-clicking or launching from a temporary terminal so errors remain visible. Full logs are written to `output\preview.log`.
 
@@ -30,7 +30,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/preview.ps1 -CoreUiR
 # Do not auto-install; fail if something is missing
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/preview.ps1 -SkipInstall -KeepOpen
 ```
-Lumina Viewer is a lightweight Windows image previewer prototype. It is designed around a small native C++ core, a Fluent-style UI powered by [core-ui](https://github.com/ghboke/core-ui), and pluggable image decoders for common, RAW, and professional image formats.
+Lumina is a lightweight Windows image previewer prototype. It is designed around a small native C++ core, a Fluent-style UI powered by [core-ui](https://github.com/ghboke/core-ui), and pluggable image decoders for common, RAW, and professional image formats.
 
 ## Goals
 
@@ -106,4 +106,5 @@ The generated executable and runtime files are copied to `output/`. The preview 
 
 
 See docs/color-management.md for the HDR/EXR tone mapping and accurate color-management roadmap.
+
 

@@ -13,7 +13,7 @@ namespace lumina::app {
 
 namespace {
 constexpr float kMinZoomPercent = 10.0F;
-constexpr float kMaxZoomPercent = 800.0F;
+constexpr float kMaxZoomPercent = 500.0F;
 constexpr float kDefaultZoomPercent = 100.0F;
 constexpr float kMinImageZoom = 0.001F;
 
@@ -252,7 +252,6 @@ void ViewerController::toggleFullscreen() {
             return;
         }
 
-        ui_window_enable_canvas_mode(window_, 1);
         SetWindowPos(
             hwnd,
             alwaysOnTop_ ? HWND_TOPMOST : HWND_TOP,
@@ -262,7 +261,6 @@ void ViewerController::toggleFullscreen() {
             monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
             SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
     } else {
-        ui_window_enable_canvas_mode(window_, 0);
         if (hasFullscreenRestoreRect_) {
             SetWindowPos(
                 hwnd,
@@ -340,7 +338,9 @@ void ViewerController::onKey(UiWindow, int vkCode, void* userdata) {
         return;
     }
 
-    if (vkCode == VK_LEFT) {
+    if (vkCode == VK_ESCAPE && self->fullscreen_) {
+        self->toggleFullscreen();
+    } else if (vkCode == VK_LEFT) {
         self->openPrevious();
     } else if (vkCode == VK_RIGHT) {
         self->openNext();
@@ -396,6 +396,7 @@ void ViewerController::onDrop(UiWindow, const wchar_t* path, void* userdata) {
 }
 
 } // namespace lumina::app
+
 
 
 

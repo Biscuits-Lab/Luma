@@ -1,4 +1,32 @@
-﻿# Lumina
+# Lumina
+
+Lumina is a lightweight native Windows image previewer. It is built around a small C++20 core, a Fluent-style UI powered by [core-ui](https://github.com/ghboke/core-ui), and pluggable image decoders for common, RAW, and professional image formats.
+
+## Goals
+
+- Fast startup and low idle memory usage.
+- Clean Windows 11 Photos-like preview UI.
+- Mouse-wheel zoom and drag-to-pan image viewing.
+- Left/right arrow navigation across images in the same folder.
+- Bottom-right zoom slider synchronized with the current view.
+- Top-center file name, bottom-left dimensions and file size.
+- Decoder boundaries ready for WIC, LibRaw, and OpenEXR.
+
+## Current Status
+
+- Details pane includes file information, basic histogram, and current color-management status.
+- Top toolbar includes delete, rotate, favorite, and more/settings placeholder controls.
+
+This repository currently contains the application skeleton, the core-ui viewer shell, and a WIC decoder for common Windows image formats. RAW support is available through LibRaw when the preview script builds the local SDK. EXR support is planned next.
+
+## Decoder Backends
+
+| Backend    | Formats | Status  |
+| ---------- | ------- | ------- |
+| WIC        | `jpg`, `jpeg`, `png`, `bmp`, `gif`, `tif`, `tiff`, plus `webp`, `heic`, `heif`, `avif` when Windows has matching WIC codecs | Implemented |
+| LibRaw     | `nef`, `nrw`, `dng`, `cr2`, `cr3`, `arw`, `srf`, `sr2`, `orf`, `rw2`, `raf` | Implemented |
+| OpenEXR    | `exr`, `hdr` tone-mapped into displayable BGRA pixels | Planned |
+| libvips / ImageMagick | Uncommon formats | Optional fallback |
 
 ## Quick Preview
 
@@ -30,47 +58,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/preview.ps1 -CoreUiR
 # Do not auto-install; fail if something is missing
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/preview.ps1 -SkipInstall -KeepOpen
 ```
-Lumina is a lightweight Windows image previewer prototype. It is designed around a small native C++ core, a Fluent-style UI powered by [core-ui](https://github.com/ghboke/core-ui), and pluggable image decoders for common, RAW, and professional image formats.
-
-## Goals
-
-- Fast startup and low idle memory usage.
-- Clean Windows 11 Photos-like preview UI.
-- Mouse-wheel zoom and drag-to-pan image viewing.
-- Left/right arrow navigation across images in the same folder.
-- Bottom-right zoom slider synchronized with the current view.
-- Top-center file name, bottom-left dimensions and file size.
-- Decoder boundaries ready for WIC, LibRaw, and OpenEXR.
-
-## Current Status
-
-- Details pane includes file information, basic histogram, and current color-management status.
-- Top toolbar includes delete, rotate, favorite, and more/settings placeholder controls.
-This repository currently contains the application skeleton, core-ui viewer shell, and a WIC decoder for common Windows image formats. RAW support is available through LibRaw when the preview script builds the local SDK. EXR support is planned next.
-
-## Planned Decoder Backends
-
-- WIC implemented: `jpg`, `jpeg`, `png`, `bmp`, `gif`, `tif`, `tiff`, plus `webp`, `heic`, `heif`, `avif` when Windows has matching WIC codecs.
-- LibRaw implemented: `nef`, `nrw`, `dng`, `cr2`, `cr3`, `arw`, `srf`, `sr2`, `orf`, `rw2`, `raf`.
-- OpenEXR: `exr`, `hdr` tone-mapped into displayable BGRA pixels.
-- Optional fallback: `libvips` or ImageMagick for uncommon formats.
-
-## Layout
-
-```text
-cmake/
-  FindCoreUI.cmake
-src/
-  app/              Application shell and viewer controller
-  image/            Image model, folder index, decoder interfaces
-  platform/         Windows utility helpers
-ui/
-  main.uix          core-ui single-file UI mockup
-docs/
-  architecture.md   Implementation plan and integration notes
-third_party/
-  core-ui/          Optional local core-ui SDK drop location
-```
 
 ## Build
 
@@ -98,14 +85,24 @@ core-ui-sdk/
 
 The generated executable and runtime files are copied to `output/`. The preview script writes logs to `output/preview.log`.
 
+## Layout
 
+```text
+cmake/
+  FindCoreUI.cmake
+src/
+  app/              Application shell and viewer controller
+  image/            Image model, folder index, decoder interfaces
+  platform/         Windows utility helpers
+ui/
+  main.uix          core-ui single-file UI mockup
+docs/
+  architecture.md   Implementation plan and integration notes
+third_party/
+  core-ui/          Optional local core-ui SDK drop location
+```
 
+## Documentation
 
-
-
-
-
-See docs/color-management.md for the HDR/EXR tone mapping and accurate color-management roadmap.
-
-
-
+- [Architecture](docs/architecture.md) — layers, decoder roadmap, memory strategy, input model.
+- [Color management](docs/color-management.md) — HDR/EXR tone mapping and accurate color-management roadmap.

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools==84.0.0", "wheel==0.46.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luma-image-viewer"
+version = "0.1.0"
+description = "A focused desktop image viewer for photography and production images"
+readme = "README.md"
+requires-python = ">=3.12"
+# No license is assigned to Luma's original source without the owner's choice.
+dependencies = [
+  "PySide6-Essentials==6.12.0",
+  "shiboken6==6.12.0",
+  "Pillow==12.3.0",
+  "numpy==2.5.4",
+  "OpenEXR==3.5.2",
+  "rawpy==0.27.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+build = ["pyinstaller==6.22.3", "pyinstaller-hooks-contrib==2026.8"]
+
+[project.gui-scripts]
+luma = "luma.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["luma*"]
+
+[tool.setuptools.package-data]
+luma = ["assets/*.png", "assets/*.ico", "assets/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

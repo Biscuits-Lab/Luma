@@ -1,0 +1,51 @@
+[CmdletBinding()]
+param(
+    [string]$PythonVersion = "3.12",
+    [switch]$SkipTests,
+    [switch]$DevelopmentOnly
+)
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+    throw "Windows builds must run on Windows. PyInstaller is not a cross-compiler."
+}
+$Root = Split-Path -Parent $PSScriptRoot
+Push-Location $Root
+try {
+    if (!(Test-Path ".venv-build\Scripts\python.exe")) {
+        & py "-$PythonVersion" -m venv .venv-build
+        if ($LASTEXITCODE -ne 0) { throw "Python $PythonVersion (64-bit) is required. Install it from python.org." }
+    }
+    $Python = Join-Path $Root ".venv-build\Scripts\python.exe"
+    & $Python -c "import sys, struct; assert sys.version_info >= (3,12); assert struct.calcsize('P') == 8, 'Use 64-bit Python'"
+    if ($LASTEXITCODE -ne 0) { throw "Unsupported Python interpreter." }
+    & $Python -m pip install --only-binary=:all: -r requirements-dev.txt
+    if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed. No source compilation fallback was attempted." }
+    & $Python -m pip install --no-build-isolation --no-deps -e .
+    if ($LASTEXITCODE -ne 0) { throw "Luma installation failed." }
+    if (!$SkipTests) {
+        $PreviousQtPlatform = $env:QT_QPA_PLATFORM
+        $env:QT_QPA_PLATFORM = "windows"
+        try {
+            & $Python -m pytest
+            if ($LASTEXITCODE -ne 0) { throw "Tests failed; packaging stopped." }
+        } finally {
+            if ($null -eq $PreviousQtPlatform) { Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue }
+            else { $env:QT_QPA_PLATFORM = $PreviousQtPlatform }
+        }
+    }
+    $LicenseArgs = @("scripts/collect_licenses.py", "--output", "build/licenses")
+    if ($DevelopmentOnly) { $LicenseArgs += "--allow-incomplete" }
+    & $Python @LicenseArgs
+    if ($LASTEXITCODE -ne 0) { throw "License collection failed; see docs/BUILDING.md." }
+    & $Python -m PyInstaller --clean --noconfirm Luma.spec
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
+    & $Python scripts/verify_bundle.py dist/Luma
+    if ($LASTEXITCODE -ne 0) { throw "Bundle verification failed." }
+    if ($DevelopmentOnly) {
+        "DEVELOPMENT ONLY: license/source fulfillment and Windows QA must be completed before redistribution." |
+            Set-Content dist/Luma/DEVELOPMENT_ONLY.txt
+    }
+    Write-Host "Built: $Root\dist\Luma\Luma.exe"
+    Write-Host "Keep the entire Luma folder. Complete docs/BUILDING.md's release checklist before redistribution."
+} finally { Pop-Location }

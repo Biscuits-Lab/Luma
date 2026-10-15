@@ -1,0 +1,100 @@
+name: Windows build and initial release
+
+on:
+  push:
+    branches: [main]
+    tags: [v0.1.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: luma-initial-v0.1.0-release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: ${{ !github.event.repository.private && (github.ref == 'refs/heads/main' || github.ref == 'refs/tags/v0.1.0') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_build: ${{ steps.gate.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: gate
+        name: Check bounded initial release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/release_gate.py check
+
+  windows:
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Release safety regression tests
+        shell: pwsh
+        run: python -m unittest discover -s scripts -p "test_*.py"
+      - name: Native Windows tests and folder bundle
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+      - name: Smoke packaged Windows executable and real decoders
+        shell: pwsh
+        run: ./.venv-build/Scripts/python.exe scripts/smoke_bundle.py dist/Luma/Luma.exe
+      - name: Collect exact dependency source material
+        shell: pwsh
+        run: ./.venv-build/Scripts/python.exe scripts/prepare_source_material.py --version 0.1.0
+      - name: Create portable ZIP and checksums
+        shell: pwsh
+        run: ./.venv-build/Scripts/python.exe scripts/package_release.py --version 0.1.0
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: luma-windows-0.1.0
+          path: |
+            artifacts/Luma-0.1.0-windows-x64.zip
+            artifacts/Luma-0.1.0-dependency-sources.zip
+            artifacts/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Save diagnostic reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: luma-windows-diagnostics
+          path: |
+            build/smoke-report.json
+            build/Luma/warn-Luma.txt
+            dist/Luma/bundle-inventory.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release:
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: luma-windows-0.1.0
+          path: artifacts
+      - name: Publish only the verified initial release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/release_gate.py publish --artifacts artifacts

@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest==9.1.1
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+setuptools==84.0.0
+wheel==0.46.3

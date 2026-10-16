@@ -123,6 +123,8 @@ class InstallerLanguageTests(unittest.TestCase):
         self.assertNotIn("SuppressibleMsgBox", ui)
         self.assertIn("LayoutLumaWizard(CurPageID)", script)
         self.assertIn("DisableDirPage=no", script)
+        self.assertIn("WizardForm.SelectDirBrowseLabel.ShowAccelChar := True", ui)
+        self.assertIn("WizardForm.SelectDirBrowseLabel.FocusControl := WizardForm.DirEdit", ui)
 
     def test_pascal_arrays_cannot_be_misread_as_inno_sections(self):
         # Inno scans leading '[' before Pascal compilation, even inside [Code].

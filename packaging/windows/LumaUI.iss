@@ -167,6 +167,7 @@ begin
   WizardForm.SelectDirLabel.Visible := False;
   WizardForm.DiskSpaceLabel.Visible := False;
   WizardForm.SelectDirBrowseLabel.Caption := CustomMessage('InstallLocation');
+  WizardForm.SelectDirBrowseLabel.ShowAccelChar := True;
   WizardForm.SelectDirBrowseLabel.FocusControl := WizardForm.DirEdit;
   WizardForm.SelectDirBrowseLabel.SetBounds(0, 0, Width - 2 * Margin, ScaleY(22));
   WizardForm.DirEdit.AutoSize := False;

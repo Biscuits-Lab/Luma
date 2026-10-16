@@ -6,10 +6,10 @@ All painted decoration uses logical coordinates, including fractional DPI.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
 )
 
@@ -207,6 +207,86 @@ def separator():
     return line
 
 
+
+class _SettingsHeaderLayout(QLayout):
+    """Keep compact headers inline, flowing actions below only when needed.
+
+    The minimum width is the wider of the two groups, not their sum. Otherwise
+    QScrollArea enlarges its content before a narrow header can ever reflow.
+    Height-for-width lets the card reserve both rows without resize callbacks
+    or a platform-dependent font/DPI breakpoint.
+    """
+    def __init__(self, title, icon, accessory):
+        super().__init__()
+        self._items = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(9)
+        heading = QWidget()
+        row = QHBoxLayout(heading)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(9)
+        row.addWidget(OutlineIcon(icon))
+        label = plain_label(title)
+        label.setObjectName('settings_heading')
+        row.addWidget(label)
+        self.addWidget(heading)
+        if accessory is not None:
+            self.addWidget(accessory)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def sizeHint(self):
+        sizes = [item.sizeHint() for item in self._items]
+        return QSize(sum(size.width() for size in sizes) + self.spacing() * (len(sizes) - 1),
+                     max((size.height() for size in sizes), default=0))
+
+    def minimumSize(self):
+        return QSize(max((item.minimumSize().width() for item in self._items), default=0),
+                     max((item.minimumSize().height() for item in self._items), default=0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        sizes = [item.sizeHint() for item in self._items]
+        if len(sizes) == 2 and width < self.sizeHint().width():
+            return sum(size.height() for size in sizes) + self.spacing()
+        return max((size.height() for size in sizes), default=0)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        if not self._items:
+            return
+        leading = self._items[0]
+        if len(self._items) == 1:
+            leading.setGeometry(rect)
+            return
+        trailing = self._items[1]
+        left, right = leading.sizeHint(), trailing.sizeHint()
+        if rect.width() < self.sizeHint().width():
+            leading.setGeometry(QRect(rect.x(), rect.y(), rect.width(), left.height()))
+            trailing.setGeometry(QRect(rect.right() - right.width() + 1,
+                                       rect.y() + left.height() + self.spacing(),
+                                       right.width(), right.height()))
+        else:
+            height = max(left.height(), right.height())
+            leading.setGeometry(QRect(rect.x(), rect.y() + (height - left.height()) // 2,
+                                      rect.width() - right.width() - self.spacing(), left.height()))
+            trailing.setGeometry(QRect(rect.right() - right.width() + 1,
+                                       rect.y() + (height - right.height()) // 2,
+                                       right.width(), right.height()))
+
+
 class SettingsCard(QFrame):
     def __init__(self, title, icon, parent=None, accessory=None):
         super().__init__(parent)
@@ -215,16 +295,7 @@ class SettingsCard(QFrame):
         self.body = QVBoxLayout(self)
         self.body.setContentsMargins(18, 16, 18, 14)
         self.body.setSpacing(8)
-        header = QHBoxLayout()
-        header.setSpacing(9)
-        header.addWidget(OutlineIcon(icon))
-        label = plain_label(title)
-        label.setObjectName('settings_heading')
-        header.addWidget(label)
-        header.addStretch()
-        if accessory is not None:
-            header.addWidget(accessory)
-        self.body.addLayout(header)
+        self.body.addLayout(_SettingsHeaderLayout(title, icon, accessory))
 
     def minimumSizeHint(self):
         hint = super().minimumSizeHint()

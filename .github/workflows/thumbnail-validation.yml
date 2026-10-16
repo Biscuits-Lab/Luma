@@ -38,10 +38,14 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_SCALE_FACTOR = "2"
+          $env:QT_QPA_PLATFORM = "windows"
           try {
             ./.venv-build/Scripts/python.exe -m pytest tests/test_zoom_stability.py tests/test_native_corners.py tests/test_chrome.py tests/test_footer_localization_layout.py tests/test_i18n.py tests/test_i18n_dialogs.py tests/test_settings_redesign.py tests/test_menu_widgets.py tests/test_startup_display.py tests/test_histogram.py tests/test_details_overlay.py tests/test_glass_backdrop.py -q
             if ($LASTEXITCODE -ne 0) { throw "High-DPI regression tests failed" }
-          } finally { Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue }
+          } finally {
+            Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
+            Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          }
       - name: Verify loaded-image drop regression sensitivity
         shell: pwsh
         run: ./.venv-build/Scripts/python.exe scripts/check_drop_regression.py

@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 from PySide6.QtCore import Qt, QSize, QTimer, QEvent, QSignalBlocker, QRectF, QPointF
-from PySide6.QtGui import QIcon, QImage, QKeySequence, QShortcut, QPixmap, QFont, QPainter, QPen, QColor, QPainterPath, QIconEngine, QFontMetricsF, QPalette
+from PySide6.QtGui import QIcon, QImage, QKeySequence, QShortcut, QPixmap, QFont, QPainter, QPen, QColor, QPainterPath, QIconEngine, QPalette
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton,
     QHBoxLayout, QVBoxLayout, QFileDialog, QStackedWidget, QComboBox,
@@ -199,7 +199,23 @@ def symbol_icon(kind):
 
 
 class ZoomMenuButton(QPushButton):
-    """Stable percent text + a centered native chevron, independent of fonts."""
+    """Reserve the full zoom range using the resolved font, never current text."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self):
+        metrics = self.fontMetrics()
+        digits = len(str(round(ImageCanvas.MAX_ZOOM * 100)))
+        labels = [digit * digits + '%' for digit in '0123456789'] + ['0.5%']
+        # paintEvent reserves 5px left and 20px for the chevron. Keep a little
+        # extra clearance, using logical font metrics without a second DPR scale.
+        width = max(82, max(metrics.horizontalAdvance(text) for text in labels) + 27)
+        return QSize(width, super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
     def paintEvent(self, event):
         option = QStyleOptionButton()
         self.initStyleOption(option)
@@ -224,10 +240,23 @@ class ZoomMenuButton(QPushButton):
         painter.drawPath(arrow)
 
 
+def _footer_text_reserve(widget):
+    # Reserve a representative five-digit image size and three-digit file size,
+    # rather than the current image/status text. Different Windows font engines
+    # can resolve the same CSS font differently; hard-coded 280px clips them.
+    sample = 'PNG   |   99999 × 99999   |   999.9 MB'
+    return max(280, widget.fontMetrics().horizontalAdvance(sample) + 2)
+
+
 class FooterInformation(QWidget):
     """A stable left region; the info button follows the actual text inside it."""
+    def __init__(self):
+        super().__init__()
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+
     def sizeHint(self):
-        return QSize(316, 30)
+        label = self.findChild(FooterStatusLabel)
+        return QSize(_footer_text_reserve(label or self) + 36, 30)
 
     def minimumSizeHint(self):
         return QSize(40, 30)
@@ -239,11 +268,10 @@ class FooterStatusLabel(QLabel):
         super().__init__('', objectName='muted')
         self._full_text = ''
         self.setTextFormat(Qt.TextFormat.PlainText)
-        self.setMaximumWidth(280)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
     def sizeHint(self):
-        return QSize(min(280, math.ceil(QFontMetricsF(self.font()).horizontalAdvance(self._full_text)) + 2),
+        return QSize(min(_footer_text_reserve(self), self.fontMetrics().horizontalAdvance(self._full_text) + 2),
                      super().sizeHint().height())
 
     def minimumSizeHint(self):
@@ -262,6 +290,14 @@ class FooterStatusLabel(QLabel):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._elide()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._elide()
+            self.updateGeometry()
+            if isinstance(self.parentWidget(), FooterInformation):
+                self.parentWidget().updateGeometry()
 
 
 class ViewerWindow(QMainWindow):
@@ -534,7 +570,6 @@ class ViewerWindow(QMainWindow):
         self.next.hide()
         controls.addSpacing(8)
         self.metadata_group = FooterInformation()
-        self.metadata_group.setMaximumWidth(316)
         metadata_row = QHBoxLayout(self.metadata_group)
         metadata_row.setContentsMargins(0, 0, 0, 0)
         metadata_row.setSpacing(6)
@@ -559,7 +594,6 @@ class ViewerWindow(QMainWindow):
         self.fit_button.setFixedWidth(34)
         controls.addWidget(self.fit_button)
         self.zoom_combo = ZoomMenuButton('—')
-        self.zoom_combo.setFixedWidth(82)
         self.zoom_combo.setToolTip(tr('Zoom relative to fit · 100% fits the window'))
         self.zoom_combo.setFixedHeight(28)
         self.zoom_combo.setStyleSheet('QPushButton { background: #303030; padding: 0; } QPushButton:hover { background: #3b3b3b; }')

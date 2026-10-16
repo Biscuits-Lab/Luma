@@ -192,6 +192,67 @@ def test_settings_cards_wrap_and_scroll_without_horizontal_clipping(qapp, monkey
         close(qapp, window, dialog)
 
 
+
+@pytest.mark.parametrize('language', ('en', 'zh-CN', 'zh-TW'))
+@pytest.mark.parametrize('width', (480, 620))
+def test_settings_header_reflows_for_large_native_font_metrics(qapp, monkeypatch, language, width):
+    # Windows' offscreen plugin can report much wider glyph metrics than the
+    # Linux fallback. Stress the measured layout independently of the platform
+    # and DPI backend, without substituting or downloading system fonts.
+    import re
+    set_language(language)
+    large_style = re.sub(r'font-size: (\d+)px',
+                         lambda match: f'font-size: {2 * int(match[1])}px',
+                         settings_widgets.SETTINGS_STYLE)
+    large_style += '\nQDialog#luma_settings QWidget { font-size: 24px; }\n'
+    monkeypatch.setattr(settings_widgets, 'SETTINGS_STYLE', large_style)
+    window, dialog = open_settings(qapp, monkeypatch)
+    try:
+        dialog.resize(width, 310)
+        for _ in range(3):
+            qapp.processEvents()
+        assert dialog.scroll_area.horizontalScrollBar().maximum() == 0
+        assert dialog.scroll_area.widget().width() <= dialog.scroll_area.viewport().width()
+        heading = dialog.update_card.findChild(QLabel, 'settings_heading')
+        heading_rect = QRect(heading.mapTo(dialog.update_card, QPoint()), heading.size())
+        actions = dialog.check_button.parentWidget()
+        actions_rect = QRect(actions.mapTo(dialog.update_card, QPoint()), actions.size())
+        assert not heading_rect.intersects(actions_rect)
+        assert dialog.update_card.rect().contains(heading_rect)
+        assert dialog.update_card.rect().contains(actions_rect)
+        assert dialog.check_button.width() >= dialog.check_button.minimumSizeHint().width()
+        header = dialog.update_card.body.itemAt(0).layout()
+        if header.geometry().width() < header.sizeHint().width():
+            assert actions_rect.top() > heading_rect.bottom()
+        dialog.update_details.setExpanded(True)
+        raw = 'C:/原始/raw {version} <b>diagnostic</b>.exr\n' * 30
+        dialog._failed(dialog._serial, raw)
+        for _ in range(3):
+            qapp.processEvents()
+        assert dialog.status_label.text() == raw
+        assert dialog.scroll_area.horizontalScrollBar().maximum() == 0
+        assert dialog.scroll_area.verticalScrollBar().maximum() > 0
+        for label in dialog.findChildren(QLabel):
+            if label.wordWrap() and label.isVisible():
+                assert label.height() >= label.heightForWidth(label.width()), label.text()
+        # Returning to a sufficiently wide layout restores the single compact
+        # row rather than leaving the controls stranded on a second line.
+        dialog.resize(1000, 500)
+        for _ in range(3):
+            qapp.processEvents()
+        heading_center = heading.mapTo(dialog.update_card, heading.rect().center()).y()
+        button_center = dialog.check_button.mapTo(dialog.update_card, dialog.check_button.rect().center()).y()
+        assert abs(heading_center - button_center) <= 1
+        assert dialog.scroll_area.horizontalScrollBar().maximum() == 0
+        dialog.resize(width, 310)
+        for _ in range(3):
+            qapp.processEvents()
+        assert dialog.scroll_area.horizontalScrollBar().maximum() == 0
+        assert dialog.status_label.height() >= dialog.status_label.heightForWidth(dialog.status_label.width())
+    finally:
+        close(qapp, window, dialog)
+
+
 def test_available_update_keeps_safety_explanation_visible(qapp, monkeypatch):
     window, dialog = open_settings(qapp, monkeypatch)
     monkeypatch.setattr(updater, 'sys', SimpleNamespace(platform='win32'))

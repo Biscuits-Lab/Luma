@@ -16,11 +16,19 @@ from luma.i18n import set_language
 
 @pytest.mark.parametrize('language', ['en', 'zh-CN', 'zh-TW'])
 @pytest.mark.parametrize('width', [800, 1280])
-def test_metadata_and_info_follow_text_without_moving_zoom(qapp, language, width):
+@pytest.mark.parametrize('larger_font', [False, True])
+def test_metadata_and_info_follow_text_without_moving_zoom(qapp, language, width, larger_font):
     set_language(language)
     window = ViewerWindow()
     window.resize(width, 560)
     window.show()
+    if larger_font:
+        # Exercise resolved font metrics wider than the old 82px/280px budgets,
+        # including font changes after construction. Do not change the app font
+        # globally or leak this stress case into later settings/menu tests.
+        window.zoom_combo.setStyleSheet(window.zoom_combo.styleSheet() +
+                                       '\nQPushButton { font-size: 20px; }')
+        window.status_label.setStyleSheet('font-size: 20px;')
     image = QImage(640, 480, QImage.Format.Format_RGB32)
     image.fill(Qt.GlobalColor.blue)
     window.canvas.set_image(image)
@@ -32,6 +40,8 @@ def test_metadata_and_info_follow_text_without_moving_zoom(qapp, language, width
         fixed = [window.metadata_group, window.fit_button, window.zoom_combo, window.zoom_slider]
         initial = [widget.geometry() for widget in fixed]
         info_positions = []
+        reserved_zoom_width = window.zoom_combo.sizeHint().width()
+        assert window.zoom_combo.width() == reserved_zoom_width
         for text in ('PNG | 1 × 1 | 1 B', 'PNG   |   4096 × 4096   |   12.1 MB',
                      '正在加载很长的文件名 Loading {image} <b> untouched ' * 30):
             window._status(text)
@@ -41,7 +51,13 @@ def test_metadata_and_info_follow_text_without_moving_zoom(qapp, language, width
             assert 0 < window.info_button.x() - window.status_label.geometry().right() <= 8
             assert window.info_button.geometry().right() < window.metadata_group.width()
             info_positions.append(window.info_button.x())
-            if width == 1280 and len(text) < 60:
+            available_text_width = (window.metadata_group.width() -
+                                    window.info_button.width() - 6)
+            if window.status_label.fontMetrics().horizontalAdvance(text) + 2 <= available_text_width:
+                assert window.status_label.text() == text
+            # A native window manager may constrain the initial requested
+            # width on a small/high-DPI desktop. Judge its actual layout size.
+            if window.width() >= 1280 and len(text) < 60:
                 assert window.status_label.text() == text
         assert info_positions[0] < info_positions[-1]
         for percent in (.5, 1, 25, 100, 200, 6400):
@@ -49,6 +65,7 @@ def test_metadata_and_info_follow_text_without_moving_zoom(qapp, language, width
             qapp.processEvents()
             assert [widget.geometry() for widget in fixed] == initial
             assert '⌄' not in window.zoom_combo.text()
+            assert window.zoom_combo.sizeHint().width() == reserved_zoom_width
             assert window.zoom_combo.fontMetrics().horizontalAdvance(window.zoom_combo.text()) < window.zoom_combo.width() - 25
         for button in window.viewbar.findChildren(QPushButton):
             assert button.height() <= 32

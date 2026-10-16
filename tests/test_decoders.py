@@ -606,3 +606,230 @@ def _assert_tiff_storage(path, original, values, orientation, compression):
                                for offset, count in zip(header.tag_v2[273], header.tag_v2[279]))
             expected = values.astype("<u2").tobytes() if values.dtype == np.uint16 else values.tobytes()
             assert encoded == expected
+
+
+@pytest.mark.parametrize('major,sign1,sign2', [
+    ('Y', '-', '+'), ('Y', '+', '+'), ('Y', '-', '-'), ('Y', '+', '-'),
+    ('X', '+', '-'), ('X', '-', '-'), ('X', '+', '+'), ('X', '-', '+'),
+])
+@pytest.mark.parametrize('rle', [False, True])
+@pytest.mark.parametrize('edge', [1, 3, 7, 32])
+def test_rgbe_bounded_preview_orientations(tmp_path, major, sign1, sign2, rle, edge):
+    height, width = 11, 13
+    canonical = np.arange(height * width * 4, dtype=np.uint8).reshape(height, width, 4)
+    canonical[..., 3] = 130
+    if major == 'Y':
+        ordered = canonical if sign1 == '-' else canonical[::-1]
+        ordered = ordered if sign2 == '+' else ordered[:, ::-1]
+        orientation = f'{sign1}Y {height} {sign2}X {width}'
+    else:
+        ordered = canonical.transpose(1, 0, 2)
+        ordered = ordered if sign1 == '+' else ordered[::-1]
+        ordered = ordered if sign2 == '-' else ordered[:, ::-1]
+        orientation = f'{sign1}X {width} {sign2}Y {height}'
+    path = hdr_file(tmp_path / 'preview.hdr', ordered, orientation, rle=rle)
+    preview = d.decode_radiance_thumbnail(path, edge)
+    factor = min(1, edge / max(width, height))
+    w, h = max(1, int(width * factor)), max(1, int(height * factor))
+    xs = ((np.arange(w) + .5) * width / w).astype(int)
+    ys = ((np.arange(h) + .5) * height / h).astype(int)
+    expected = rgbe_float(canonical)[ys[:, None], xs[None, :]]
+    np.testing.assert_array_equal(preview.pixels[..., :3], expected)
+    assert preview.pixels.dtype == np.float32 and preview.linear
+    assert (preview.width, preview.height) == (w, h)
+    assert preview.metadata['Source dimensions'] == '13 × 11'
+    assert 'sampled thumbnail' in preview.metadata['Limitations']
+
+
+@pytest.mark.parametrize('rle', [False, True])
+def test_rgbe_full_exponent_precision(tmp_path, rle):
+    values = np.tile(np.array([0, 128, 255, 129], dtype=np.uint8), (2, 256, 1))
+    values[..., 3] = np.arange(256, dtype=np.uint8)
+    path = hdr_file(tmp_path / 'full-range.hdr', values, rle=rle)
+    decoded = d.decode_image(path)
+    np.testing.assert_array_equal(decoded.pixels[..., :3], rgbe_float(values))
+    assert np.all(decoded.pixels[:, 0, :3] == 0)
+    assert decoded.pixels[0, 255, 2] > 1e38
+    assert np.isfinite(decoded.pixels).all()
+
+
+def test_rgbe_legacy_readahead_preserves_following_scanlines(tmp_path):
+    # The first scanline consumes only three RGBE records. Speculative block
+    # reading must rewind without stealing bytes from the next modern scanline.
+    path = tmp_path / 'mixed-legacy.hdr'
+    path.write_bytes(b'#?RGBE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 8\n'
+                     + bytes([128, 64, 32, 129, 20, 40, 60, 130, 1, 1, 1, 6])
+                     + bytes([2, 2, 0, 8, 136, 12, 136, 24, 136, 48, 136, 131]))
+    decoded = d.decode_image(path)
+    expected = np.empty((2, 8, 4), dtype=np.uint8)
+    expected[0] = [20, 40, 60, 130]
+    expected[0, 0] = [128, 64, 32, 129]
+    expected[1] = [12, 24, 48, 131]
+    np.testing.assert_array_equal(decoded.pixels[..., :3], rgbe_float(expected))
+
+
+@pytest.mark.parametrize('payload', [b'\x10\x20\x30\x80', b'\x10\x20\x30\x80\x01',
+    b'\x10\x20\x30\x80\x01\x01\x01\x02'])
+def test_rgbe_truncated_flat_or_legacy_rejected(tmp_path, payload):
+    path = tmp_path / 'truncated.hdr'
+    path.write_bytes(b'#?RGBE\n\n-Y 1 +X 8\n' + payload)
+    with pytest.raises(d.DecodeError, match='Truncated'):
+        d.decode_image(path)
+
+
+def test_rgbe_preview_uses_separate_source_pixel_limit(tmp_path, monkeypatch):
+    values = np.tile(np.array([128, 64, 32, 129], dtype=np.uint8), (65, 65, 1))
+    path = hdr_file(tmp_path / 'large-source.hdr', values, rle=True)
+    monkeypatch.setattr(d, 'MAX_PIXELS', 4096)
+    with pytest.raises(d.ImageTooLargeError):
+        d.decode_image(path)
+    preview = d.decode_radiance_thumbnail(path, 8)
+    assert preview.pixels.shape == (8, 8, 4)
+    assert preview.nbytes == 1024
+
+
+@pytest.mark.parametrize('resolution', ['-Y 8192 +X 32768', '-Y 1 +X 32769', '-Y 0 +X 5'])
+def test_rgbe_preview_checks_source_bounds_before_allocation(tmp_path, resolution):
+    path = tmp_path / 'bad-preview.hdr'
+    path.write_bytes(b'#?RGBE\n\n' + resolution.encode() + b'\n')
+    with pytest.raises(d.DecodeError):
+        d.decode_radiance_thumbnail(path, 64)
+
+
+@pytest.mark.parametrize('edge', [0, -1, 1025, 1.5, True])
+def test_rgbe_preview_rejects_bad_output_bounds(tmp_path, edge):
+    with pytest.raises(ValueError, match='Thumbnail edge'):
+        d.decode_radiance_thumbnail(tmp_path / 'unused.hdr', edge)
+
+
+def test_rgbe_preview_validates_unselected_scanlines(tmp_path):
+    values = np.tile(np.array([128, 64, 32, 129], dtype=np.uint8), (9, 12, 1))
+    path = hdr_file(tmp_path / 'bad-unsampled.hdr', values, rle=True)
+    # edge1 selects the center row; damage a later, unselected row.
+    path.write_bytes(path.read_bytes()[:-1])
+    with pytest.raises(d.DecodeError, match='Truncated'):
+        d.decode_radiance_thumbnail(path, 1)
+
+
+@pytest.mark.parametrize('preview', [False, True])
+def test_rgbe_cancellation_stops_between_scanlines(tmp_path, monkeypatch, preview):
+    values = np.tile(np.array([128, 64, 32, 129], dtype=np.uint8), (100, 12, 1))
+    path = hdr_file(tmp_path / 'cancel.hdr', values, rle=True)
+    scans = []
+    original = d._read_rgbe_scanline
+    def tracked(stream, length):
+        scans.append(length)
+        return original(stream, length)
+    monkeypatch.setattr(d, '_read_rgbe_scanline', tracked)
+    cancelled = lambda: len(scans) >= 3
+    with pytest.raises(d.DecodeCancelled):
+        if preview:
+            d.decode_radiance_thumbnail(path, 2, cancelled=cancelled)
+        else:
+            d.decode_image(path, cancelled=cancelled)
+    assert len(scans) == 3
+
+
+def test_decode_precancelled_does_not_open_file(tmp_path):
+    with pytest.raises(d.DecodeCancelled):
+        d.decode_image(tmp_path / 'missing.hdr', cancelled=lambda: True)
+
+
+def test_render_cancellation_and_source_immutability():
+    source = image(np.ones((384, 32, 4), dtype=np.float32))
+    before = source.pixels.copy()
+    checks = []
+    def cancelled():
+        checks.append(True)
+        return len(checks) >= 3
+    with pytest.raises(d.DecodeCancelled):
+        d.render_rgba(source, cancelled=cancelled)
+    assert len(checks) == 3
+    np.testing.assert_array_equal(source.pixels, before)
+
+
+def test_ldr_fast_path_returns_independent_exact_array():
+    rng = np.random.default_rng(3)
+    pixels = rng.integers(0, 256, (32, 32, 4), dtype=np.uint8)
+    source = d.ImageData(Path('ldr.png'), pixels, False)
+    rendered = d.render_rgba(source)
+    np.testing.assert_array_equal(rendered, pixels)
+    assert not np.shares_memory(source.pixels, rendered)
+    rendered[:] = 0
+    np.testing.assert_array_equal(source.pixels, pixels)
+
+
+def test_inplace_srgb_transfer_exactly_matches_reference():
+    rng = np.random.default_rng(21)
+    values = rng.random((257, 31, 3), dtype=np.float32)
+    values[0, :4] = np.array([0, .00313079, .0031308, .00313081], dtype=np.float32)[:, None]
+    expected = d._linear_to_srgb(values)
+    d._linear_to_srgb_inplace(values)
+    np.testing.assert_array_equal(values, expected)
+
+
+@pytest.mark.parametrize('linear', [False, True])
+@pytest.mark.parametrize('associated', [False, True])
+@pytest.mark.parametrize('exposure', [-3, 0, 2])
+@pytest.mark.parametrize('channel', ['RGBA', 'RGB', 'R', 'G', 'B', 'A'])
+@pytest.mark.parametrize('tone', ['Reinhard', 'ACES', 'Linear'])
+def test_render_exact_reference_formula(linear, associated, exposure, channel, tone):
+    rng = np.random.default_rng(64)
+    pixels = rng.normal(.2, 2, (7, 13, 4)).astype(np.float32)
+    pixels[0, :4] = [np.nan, np.inf, -np.inf, 1e30]
+    metadata = {'Alpha mode': 'premultiplied' if associated else 'straight'}
+    source = image(pixels, linear, metadata)
+    alpha = np.clip(np.nan_to_num(pixels[..., 3], nan=0, posinf=1, neginf=0), 0, 1)
+    expected = np.empty(pixels.shape, dtype=np.uint8)
+    if channel == 'A':
+        expected[..., :3] = np.rint(alpha[..., None] * 255).astype(np.uint8)
+        expected[..., 3] = 255
+    else:
+        # Release0.1.1 equations, kept out-of-place as an independent oracle for
+        # the optimized renderer's in-place/channel-selective workspaces.
+        rgb = np.clip(np.nan_to_num(pixels[..., :3], nan=0, posinf=1e20, neginf=0), 0, 1e20)
+        if associated:
+            np.divide(rgb, alpha[..., None], out=rgb, where=alpha[..., None] > 1e-8)
+            rgb[alpha <= 1e-8] = 0
+        if not linear:
+            rgb = d._srgb_to_linear(np.minimum(rgb, 1))
+        rgb *= 2.0 ** exposure
+        if linear and tone == 'Reinhard':
+            rgb = rgb / (1 + rgb)
+        elif linear and tone == 'ACES':
+            rgb = np.minimum(rgb, 1e6)
+            rgb = (rgb * (2.51 * rgb + .03)) / (rgb * (2.43 * rgb + .59) + .14)
+        rgb = d._linear_to_srgb(np.clip(rgb, 0, 1))
+        if channel in ('R', 'G', 'B'):
+            index = ('R', 'G', 'B').index(channel)
+            rgb = rgb[..., index:index + 1]
+        expected[..., :3] = np.rint(np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+        expected[..., 3] = np.rint(alpha * 255).astype(np.uint8) if channel == 'RGBA' else 255
+    np.testing.assert_array_equal(d.render_rgba(source, exposure, channel, tone), expected)
+    np.testing.assert_array_equal(source.pixels, pixels)
+
+
+@pytest.mark.parametrize('length', [8, 127, 128, 129, 257, 1024])
+def test_rgbe_variable_rle_packets_and_stream_position(length):
+    from io import BytesIO
+    rng = np.random.default_rng(length)
+    expected = np.empty((length, 4), dtype=np.uint8)
+    encoded = bytearray((2, 2, length >> 8, length & 255))
+    for component in range(4):
+        cursor = 0
+        while cursor < length:
+            repeated = bool(rng.integers(0, 2))
+            count = int(rng.integers(1, min(length - cursor, 127 if repeated else 128) + 1))
+            if repeated:
+                value = int(rng.integers(0, 256))
+                encoded.extend((128 + count, value))
+                expected[cursor:cursor + count, component] = value
+            else:
+                values = rng.integers(0, 256, count, dtype=np.uint8)
+                encoded.append(count)
+                encoded.extend(values.tobytes())
+                expected[cursor:cursor + count, component] = values
+            cursor += count
+    stream = BytesIO(encoded + b'tail')
+    np.testing.assert_array_equal(d._read_rgbe_scanline(stream, length), expected)
+    assert stream.read() == b'tail'

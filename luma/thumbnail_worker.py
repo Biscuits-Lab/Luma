@@ -79,13 +79,25 @@ def _decoder_limits():
             setattr(decoders, name, value)
 
 
-def _linear_or_high_precision(path, edge):
+def _linear_or_high_precision(path, edge, *, exr=False):
     from PIL import Image
     with _decoder_limits() as decoders:
-        decoded = decoders.decode_image(path)
+        # The native bridge deliberately uses synthetic filenames. EXR content
+        # found by the generic provider therefore cannot use suffix dispatch.
+        decoded = decoders._decode_exr(path) if exr else decoders.decode_image(path)
         image = Image.fromarray(decoders.render_rgba(decoded))
     image.thumbnail((edge, edge), Image.Resampling.LANCZOS, reducing_gap=3.0)
     return image
+
+
+def _radiance(path, edge):
+    from PIL import Image
+    from . import decoders
+    # Radiance input can be far larger than an in-memory float image: the
+    # preview decoder validates scanlines but retains only bounded samples.
+    # Keep the native input/deadline/job limits; never raise full-decode limits.
+    decoded = decoders.decode_radiance_thumbnail(path, edge)
+    return Image.fromarray(decoders.render_rgba(decoded))
 
 
 def _raw(path, edge):
@@ -116,27 +128,68 @@ def _raw(path, edge):
         raise ValueError("Unsupported RAW preview format")
 
 
+def _content_thumbnail(path, edge):
+    """Owned executable-association fallback, using bytes rather than a name.
+
+    A stream-only Shell provider has no trustworthy original extension. Known
+    HDR/EXR signatures select their bounded decoders; Pillow keeps its normal
+    raster semantics, and unrecognized content can try bounded LibRaw previews.
+    """
+    from PIL import Image, UnidentifiedImageError
+    with path.open("rb") as stream:
+        signature = stream.read(11)
+        stream.seek(0)
+        if signature.startswith((b"#?RADIANCE", b"#?RGBE")):
+            return _radiance(path, edge)
+        if signature.startswith(b"\x76\x2f\x31\x01"):
+            return _linear_or_high_precision(path, edge, exr=True)
+        if signature[8:11] == b"CR\x02":  # Canon CR2's TIFF-based signature.
+            return _raw(path, edge)
+        try:
+            image = Image.open(stream)
+        except UnidentifiedImageError:
+            image = None
+        if image is not None:
+            with image:
+                tags = getattr(image, "tag_v2", {})
+                if image.format == "TIFF" and (
+                    330 in tags or 50706 in tags  # SubIFDs / DNGVersion
+                    or tags.get(262) in (32803, 34892)  # CFA / LinearRaw
+                    or tags.get(259) == 34713  # Nikon compression
+                ):
+                    # NEF/DNG can expose only a tiny first TIFF image to Pillow.
+                    # Prefer LibRaw's embedded preview when the container has
+                    # RAW/subimage markers. Ordinary unsupported TIFF pyramids
+                    # retain the Pillow/ICC/orientation path below.
+                    import rawpy
+                    try:
+                        return _raw(path, edge)
+                    except rawpy.LibRawFileUnsupportedError:
+                        pass
+                if image.mode in ("I", "F") or image.mode.startswith("I;16"):
+                    return _linear_or_high_precision(path, edge)
+                return _raster(image, edge)
+    return _raw(path, edge)
+
+
 def generate_thumbnail(path, mode, edge):
     """Return a bounded Pillow RGBA image; no disk writes or Qt initialization."""
     from PIL import Image
     path = Path(path)
-    if mode not in MODES or not isinstance(edge, int) or not 1 <= edge <= MAX_EDGE:
+    if mode not in MODES or isinstance(edge, bool) or not isinstance(edge, int) or not 1 <= edge <= MAX_EDGE:
         raise ValueError("Invalid thumbnail request")
     if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_FILE_BYTES:
         raise ValueError("Invalid or oversized thumbnail input")
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
-        if mode in ("hdr", "exr"):
-            result = _linear_or_high_precision(path, edge)
+        if mode == "hdr":
+            result = _radiance(path, edge)
+        elif mode == "exr":
+            result = _linear_or_high_precision(path, edge, exr=True)
         elif mode == "raw":
             result = _raw(path, edge)
         else:
-            # Keep raw TIFF storage geometry out of Pillow's filename mmap path.
-            with path.open("rb") as stream, Image.open(stream) as image:
-                if image.mode in ("I", "F") or image.mode.startswith("I;16"):
-                    result = _linear_or_high_precision(path, edge)
-                else:
-                    result = _raster(image, edge)
+            result = _content_thumbnail(path, edge)
     if result.mode != "RGBA" or not 1 <= result.width <= edge or not 1 <= result.height <= edge:
         raise ValueError("Invalid thumbnail result")
     return result

@@ -55,6 +55,21 @@ Published assets:
 
 The updater expects the exact Windows ZIP name and reads its SHA-256 from `SHA256SUMS`. Keep the ZIP ordinary stored/deflated with a single `Luma` folder, without symlinks or special filesystem entries.
 
+## Current development candidate
+
+`.github/workflows/thumbnail-validation.yml` validates the `feature/performance`
+branch as version 0.1.2. It never publishes a release. The exact commit must pass
+viewer/decoder regressions, 200% Qt scaling tests, native bridge tests, packaged
+viewer smoke, real required-surrogate extraction (including 4K/8K/16K HDR and
+Applications\Luma.exe association lookup), and installer lifecycle checks.
+The candidate artifact contains setup EXE, portable ZIP, dependency-source ZIP,
+SHA256SUMS and diagnostic evidence. Publication is a separate, intentional step
+using those exact tested bytes; existing version tags/assets must not move.
+
+The Linux measurements in [PERFORMANCE.md](PERFORMANCE.md) do not substitute for
+Windows validation. DWM corner requests have unit coverage, but actual Windows 11
+corner appearance/snap behavior still needs interactive visual checking.
+
 ## Release acceptance checklist
 
 Automated checks are necessary but not a substitute for manual native UI validation:

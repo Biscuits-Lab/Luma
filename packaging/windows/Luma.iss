@@ -69,12 +69,21 @@ Name: "{autoprograms}\Luma"; Filename: "{app}\versions\{#PayloadId}\Luma.exe"; W
 Name: "{autodesktop}\Luma"; Filename: "{app}\versions\{#PayloadId}\Luma.exe"; WorkingDir: "{app}\versions\{#PayloadId}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\versions\{#PayloadId}\Luma.exe"; Description: "Launch Luma"; Flags: nowait postinstall skipifsilent unchecked
+Filename: "{app}\versions\{#PayloadId}\Luma.exe"; Description: "Launch Luma"; Flags: nowait postinstall skipifsilent unchecked; Check: ShellRegistrationSucceeded
 
 ; No [Registry], [InstallDelete] or [UninstallDelete] entries: shell registration
-; requires the user's explicit Settings action; images/settings are never purged.
+; uses the application's journaled current-user helper; images/settings are never purged.
 [Code]
+var
+  ShellRegistrationComplete: Boolean;
+  ShellRegistrationFailure: String;
+
 #include IntegrityFile
+
+function ShellRegistrationSucceeded: Boolean;
+begin
+  Result := ShellRegistrationComplete;
+end;
 
 function HasReparseAncestor(Path: String): Boolean;
 var
@@ -134,11 +143,53 @@ begin
   end;
 end;
 
-procedure InitializeWizard;
+procedure CurPageChanged(CurPageID: Integer);
 begin
-  WizardForm.FinishedLabel.Caption :=
-    'Luma has been installed for your Windows account.' + #13#10#13#10 +
-    'Explorer thumbnails and Open with integration are optional. Open Luma Settings to enable them. Your default image application is unchanged.';
+  if CurPageID <> wpFinished then Exit;
+  if ShellRegistrationComplete then
+    WizardForm.FinishedLabel.Caption :=
+      'Luma has been installed for your Windows account.' + #13#10#13#10 +
+      'Explorer thumbnail support and Open with integration are registered automatically. Select Luma in Windows Default apps to use it as your image viewer. Your default image application is unchanged.'
+  else
+    WizardForm.FinishedLabel.Caption := ShellRegistrationFailure;
+end;
+
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
+  MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := MemoDirInfo + NewLine + NewLine + MemoGroupInfo + NewLine +
+    MemoTasksInfo + NewLine + NewLine +
+    'Setup registers Luma thumbnail support and Open with entries for your Windows account. ' +
+    'Your current default applications and other thumbnail providers are preserved.';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Exe: String;
+  ResultCode: Integer;
+begin
+  if CurStep <> ssPostInstall then Exit;
+  ShellRegistrationComplete := False;
+  Exe := ExpandConstant('{app}\versions\{#PayloadId}\Luma.exe');
+  ResultCode := -1;
+  if Exec(Exe, '--shell-register-current-user', ExtractFileDir(Exe),
+          SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    ShellRegistrationComplete := ResultCode = 0;
+  Log(Format('Luma shell registration helper result: %d', [ResultCode]));
+  if not ShellRegistrationComplete then begin
+    { Keep every payload: an older DLL can still be mapped by Explorer. The
+      registrar rolls back its own transaction; never delete files on failure. }
+    ShellRegistrationFailure := 'Luma files have been installed, but Explorer thumbnail registration could not be updated safely.' + #13#10#13#10 +
+      'Another Luma copy or a changed registration may still own these entries. Close Luma and retry Setup, or use Luma Settings to inspect and repair registration. Your default image application has not been changed.';
+    Log(ShellRegistrationFailure);
+    SuppressibleMsgBox(ShellRegistrationFailure, mbError, MB_OK, IDOK);
+  end;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  { Nonzero even for /VERYSILENT: automation must not report registration as done. }
+  if ShellRegistrationComplete then Result := 0 else Result := 10;
 end;
 
 function FirstBusyBinary(const Directory: String): String;
@@ -197,12 +248,12 @@ begin
   if CurUninstallStep <> usUninstall then Exit;
   Exe := ExpandConstant('{app}\versions\{#PayloadId}\Luma.exe');
   if not FileExists(Exe) then
-    StopUninstall('Luma is incomplete. Reinstall this version, then retry uninstalling so its optional Explorer registration can be safely removed.');
+    StopUninstall('Luma is incomplete. Reinstall this version, then retry uninstalling so its Explorer registration can be safely removed.');
   if not Exec(Exe, '--shell-unregister-if-owned', ExtractFileDir(Exe),
               SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     StopUninstall('Luma could not check its Explorer registration. Close Luma, reinstall if necessary, and retry uninstalling. No application files have been removed.');
   if ResultCode <> 0 then
-    StopUninstall('Luma could not safely remove its Explorer registration. Open Luma Settings to disable Explorer integration, then retry uninstalling. No application files have been removed.');
+    StopUninstall('Luma could not safely remove its Explorer registration. Open Luma Settings to inspect and repair registration, then retry uninstalling. No application files have been removed.');
   BusyFile := FirstBusyBinary(ExpandConstant('{app}\versions'));
   if BusyFile <> '' then
     StopUninstall('Luma Explorer integration has been disabled where owned by this installation. A file is still in use or cannot be accessed:' + #13#10 + BusyFile + #13#10#13#10 +

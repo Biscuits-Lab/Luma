@@ -1,7 +1,7 @@
-"""Opt-in, per-user Explorer registration for the portable Windows x64 bundle.
+"""Owned, per-user Explorer registration for the Windows x64 bundle.
 
 Import, registration_plan(), and status() are read-only. Call install/uninstall
-only from explicit Settings actions. Windows Default Apps selection is separate.
+from setup, removal, or explicit Settings repair. Default Apps choice is separate.
 
 Different pre-existing values are never replaced; identical values are never
 adopted. Thus every owned entry's exact original value is absent. A bounded
@@ -167,6 +167,10 @@ def registration_plan(
     add(app, "FriendlyAppName", "Luma")
     add(_key(app, "DefaultIcon"), "", f'"{exe}",0')
     add(_key(app, "shell", "open", "command"), "", f'"{exe}" "%1"')
+    # Open With's executable route can select Applications\Luma.exe rather
+    # than a per-format ProgID. This owned fallback sniffs the stream content;
+    # the per-format route below still preserves common-image providers.
+    add(_key(app, "shellex", THUMBNAIL_IID), "", PROVIDERS["raster"])
 
     for extension in EXTENSIONS:
         progid = "Luma.Image." + extension[1:]
@@ -598,15 +602,45 @@ def _public_errors(function):
 
 
 @_public_errors
-def install(executable: Path, registry=None) -> Result:
-    """Explicit Settings action; never selects or replaces Windows defaults."""
+def install(executable: Path, registry=None, *, allowed_previous_executables=None) -> Result:
+    """Register owned entries; never select or replace Windows defaults.
+
+    Automatic setup supplies an exact owner allowlist. Explicit Settings repair
+    can deliberately move a registration to this copy by omitting the allowlist.
+    Ownership is checked before recovering a pending transaction.
+    """
     _runtime_guard()
     exe = _checked_executable(executable)
+    allowed = None
+    if allowed_previous_executables is not None:
+        allowed = {_windows_path(str(path), "Luma.exe").casefold()
+                   for path in allowed_previous_executables}
+        if len(allowed) > MAX_ENTRIES:
+            raise ShellIntegrationError("Automatic registration owner list exceeds its bound.")
+        allowed.add(exe.casefold())
     registry = registry if registry is not None else WinRegistry()
     with registry.locked():
+        if allowed is not None:
+            document, _ = _read_manifest(registry)
+            if document is not None:
+                snapshots = ([document["data"]] if document["state"] == "active" else
+                             [data for data in (document["base"], document["target"])
+                              if data is not None])
+                if not snapshots or not all(any(_owned_by_executable(data, owner)
+                                                for owner in allowed) for data in snapshots):
+                    raise RegistrationConflict(
+                        "Explorer registration belongs to another Luma copy. It was left untouched. "
+                        "Use Register this copy / repair in Settings to move it deliberately.")
         base, raw, recovered = _recover(registry)
         handlers = {ext: registry.provider_for(ext) for ext in RASTER}
         old_entries = {_address(e): e for e in (base["entries"] if base else [])}
+        for extension in RASTER:
+            address = (_key(CLASSES, "Luma.Image." + extension[1:], "shellex", THUMBNAIL_IID), "")
+            old = old_entries.get(address)
+            # Selecting our generic executable handler must not replace the
+            # common-image provider retained on an existing per-format ProgID.
+            if old is not None and handlers[extension] == PROVIDERS["raster"]:
+                handlers[extension] = old["written"]["data"]
         entries, changes, conflicts = [], [], []
         preserved = 0
         for write in registration_plan(exe, handlers):
@@ -657,6 +691,36 @@ def install(executable: Path, registry=None) -> Result:
         }
         _transaction(registry, base, target, changes, created, raw)
         return Result(len(changes), preserved, recovered)
+
+
+def prepare_startup_registration(executable: Path, registry=None) -> Result:
+    """One background startup check for packaged Windows; no default changes.
+
+    A healthy current-copy manifest takes the read-only path. Setup of a fresh
+    portable copy or upgrade of its own old plan uses the normal transaction.
+    Another bundle's ownership and external modifications are never adopted.
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return Result(0)
+    _runtime_guard()
+    exe = _checked_executable(executable)
+    registry = registry if registry is not None else WinRegistry()
+    with registry.locked():
+        document, _ = _read_manifest(registry)
+        if document is not None and document["state"] == "active":
+            data = document["data"]
+            if not _owned_by_executable(data, exe):
+                raise RegistrationConflict(
+                    "Explorer registration belongs to another Luma copy. "
+                    "Use Register this copy / repair in Settings if you want to switch.")
+            if any(registry.read(e["key"], e["name"]) != _decoded_value(e["written"])
+                   for e in data["entries"]):
+                raise RegistrationConflict(
+                    "Another app changed Luma's Explorer registration. Those changes were preserved.")
+            owned = {_address(e) for e in data["entries"]}
+            if data["thumbnails_enabled"] and set(_TEMPLATE) <= owned:
+                return Result(0)
+    return install(Path(exe), registry=registry, allowed_previous_executables=(exe,))
 
 
 def _uninstall_locked(registry) -> Result:
@@ -828,9 +892,53 @@ def status(registry=None) -> Status:
         if not changed and native and _stale_paths(entries, sys.executable):
             state = "stale"
             detail = "Registration points to another bundle location; use Repair."
+        if native and enabled and state == "installed":
+            detail = _hdr_association_detail(registry)
         return Status(state, len(entries), changed, detail, enabled)
     except (ShellIntegrationError, OSError) as exc:
         return Status("blocked", detail=str(exc))
+
+
+def _association_string(extension: str, kind: int, extra: str | None = None) -> str | None:
+    """Ask the Shell's association resolver, without verification or fixups.
+
+    A hand-written registry search misses base/perceived-type providers and can
+    disagree with the user's effective association. Output is always bounded.
+    This query does not activate a provider or load its DLL.
+    """
+    if extension not in EXTENSIONS or kind not in (16, 20):
+        raise ShellIntegrationError("Unsupported association query.")
+    from ctypes import wintypes
+    query = ctypes.WinDLL("shlwapi").AssocQueryStringW
+    query.argtypes = [wintypes.DWORD, ctypes.c_int, wintypes.LPCWSTR,
+                      wintypes.LPCWSTR, wintypes.LPWSTR,
+                      ctypes.POINTER(wintypes.DWORD)]
+    query.restype = ctypes.c_long
+    result = ctypes.create_unicode_buffer(MAX_VALUE_CHARS)
+    length = wintypes.DWORD(len(result))
+    # ASSOCF_NOTRUNCATE | ASSOCF_NOFIXUPS; respect per-user choices.
+    hr = query(0x00000020 | 0x00000100, kind, extension, extra,
+               result, ctypes.byref(length))
+    if hr != 0 or not 1 < length.value <= len(result):
+        return None
+    text = result.value
+    return text if text and len(text) < len(result) else None
+
+
+def _hdr_association_detail(registry) -> str:
+    """A registration receipt is not proof that Windows selects our handler."""
+    try:
+        provider = registry.effective_provider_for(".hdr")
+        if provider in (PROVIDERS["hdr"], PROVIDERS["raster"]):
+            return "Windows selects Luma's thumbnail handler for .hdr."
+        progid = _association_string(".hdr", 20)  # ASSOCSTR_PROGID
+    except OSError:
+        return "The current .hdr thumbnail association could not be checked."
+    detail = ("Windows currently selects another thumbnail provider for .hdr."
+              if provider else "Windows did not report a thumbnail provider for .hdr.")
+    if progid and progid.casefold() == r"Applications\Luma.exe".casefold():
+        detail += " This file type uses the executable's Open With association."
+    return detail + " Choose Luma for .hdr in Windows Default Apps, then reopen the folder."
 
 
 def _user_mutex_name() -> str:
@@ -967,6 +1075,14 @@ class WinRegistry:
     def provider_for(self, extension):
         if extension not in RASTER:
             return None
+        try:
+            effective = self.effective_provider_for(extension)
+        except OSError:
+            effective = None
+        if effective:
+            return effective
+        # Conservative fallback if the Shell cannot resolve an association.
+        # These reads never repair defaults or replace foreign values.
         user_choice = self._read(
             self.w.HKEY_CURRENT_USER,
             _key(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts",
@@ -995,6 +1111,10 @@ class WinRegistry:
             ):
                 return value.data.upper()
         return None
+
+    def effective_provider_for(self, extension):
+        value = _association_string(extension, 16, THUMBNAIL_IID)
+        return value.upper() if value and GUID.fullmatch(value) else None
 
     @contextlib.contextmanager
     def locked(self):

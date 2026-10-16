@@ -1,15 +1,15 @@
-name: Windows thumbnail and installer validation
+name: Windows performance, thumbnail and installer validation
 
 on:
   push:
-    branches: [feature/explorer-thumbnails]
+    branches: [feature/performance]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: luma-thumbnail-validation
+  group: luma-performance-validation
   cancel-in-progress: false
 
 jobs:
@@ -34,6 +34,14 @@ jobs:
       - name: Verify installer and release-safety contracts
         shell: pwsh
         run: ./.venv-build/Scripts/python.exe -m pytest scripts/test_installer_contract.py scripts/test_release_gate.py -q
+      - name: Verify relative zoom at 200 percent scaling
+        shell: pwsh
+        run: |
+          $env:QT_SCALE_FACTOR = "2"
+          try {
+            ./.venv-build/Scripts/python.exe -m pytest tests/test_zoom_stability.py tests/test_native_corners.py -q
+            if ($LASTEXITCODE -ne 0) { throw "High-DPI regression tests failed" }
+          } finally { Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue }
       - name: Verify loaded-image drop regression sensitivity
         shell: pwsh
         run: ./.venv-build/Scripts/python.exe scripts/check_drop_regression.py
@@ -47,23 +55,23 @@ jobs:
         run: ./.venv-build/Scripts/python.exe scripts/smoke_thumbnails.py
       - name: Collect dependency sources
         shell: pwsh
-        run: ./.venv-build/Scripts/python.exe scripts/prepare_source_material.py --version 0.1.1
+        run: ./.venv-build/Scripts/python.exe scripts/prepare_source_material.py --version 0.1.2
       - name: Package candidate ZIP and checksums
         shell: pwsh
-        run: ./.venv-build/Scripts/python.exe scripts/package_release.py --version 0.1.1
+        run: ./.venv-build/Scripts/python.exe scripts/package_release.py --version 0.1.2
       - name: Build current-user Windows installer
         shell: pwsh
         run: ./scripts/build_installer.ps1
       - name: Verify installer lifecycle on disposable runner
         shell: pwsh
-        run: ./scripts/test_installer.ps1 -Installer artifacts/Luma-0.1.1-windows-x64-setup.exe
+        run: ./scripts/test_installer.ps1 -Installer artifacts/Luma-0.1.2-windows-x64-setup.exe
       - name: Require successful Shell isolation before accepting candidate
         if: steps.thumbnails.outcome != 'success'
         shell: pwsh
         run: throw 'Required Shell thumbnail validation failed; candidate artifacts are withheld.'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: luma-0.1.1-windows-candidate
+          name: luma-0.1.2-windows-candidate
           path: artifacts/*
           if-no-files-found: error
           compression-level: 0

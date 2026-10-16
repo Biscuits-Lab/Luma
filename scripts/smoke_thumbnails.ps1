@@ -57,6 +57,8 @@ foreach ($mode in $modes.Keys) {
     $extensions[$mode] = ".luma-thumb-ci-$id-$mode"
 }
 $handlerId = "{E357FCCD-A995-4576-B01F-234630154E96}"
+$applicationKey = "Software\Classes\Applications\Luma.exe"
+$applicationExtension = ".luma-thumb-ci-$id-application"
 $ownedKeys = [Collections.Generic.List[string]]::new()
 $ownedDirs = [Collections.Generic.List[string]]::new()
 $failures = [Collections.Generic.List[string]]::new()
@@ -166,6 +168,8 @@ try {
         $paths += "Software\Classes\CLSID\$($modes[$mode])"
         $paths += "Software\Classes\$($extensions[$mode])"
     }
+    $paths += $applicationKey
+    $paths += "Software\Classes\$applicationExtension"
     foreach ($hive in @(
         [Microsoft.Win32.RegistryHive]::CurrentUser,
         [Microsoft.Win32.RegistryHive]::LocalMachine
@@ -206,14 +210,20 @@ import zlib
 
 root, destination, manifest = map(Path, sys.argv[1:])
 sys.path.insert(0, str(root))
-from scripts.smoke_bundle import prepare_fixtures, RAW_BLOB, RAW_NAME, RAW_URL
+from scripts.smoke_bundle import prepare_fixtures, prepare_hdr_thumbnail_fixtures, RAW_BLOB, RAW_NAME, RAW_URL
 
 expected_raw = "e03d193927a604de40fd0fd7a71e33fde878a0e1"
 if RAW_BLOB != expected_raw:
     raise RuntimeError("RAW fixture pin changed; review before accepting it")
 files = prepare_fixtures(destination, include_raw=True)
+files += prepare_hdr_thumbnail_fixtures(destination)
+# The content-aware executable association must cover common JPEG as well.
+from PIL import Image
+jpeg = destination / "common-image.jpg"
+Image.new("RGB", (80, 40), (180, 90, 30)).save(jpeg)
+files.append(jpeg)
 suffix_modes = {
-    ".png": "raster", ".tga": "raster", ".dds": "raster",
+    ".png": "raster", ".jpg": "raster", ".tga": "raster", ".dds": "raster",
     ".hdr": "hdr", ".exr": "exr", ".nef": "raw",
 }
 required = {"smoke.png", "smoke.hdr", "smoke.exr", RAW_NAME}
@@ -280,6 +290,24 @@ manifest.write_text(json.dumps({
         }
         finally { $root.Dispose() }
     }
+    # Exercise the real owned executable-association lookup as well as the
+    # per-format fixture path. Only this disposable extension default is set;
+    # no real extension default or UserChoice is touched.
+    $root = New-OwnedKey $applicationKey
+    try {
+        $handler = $root.CreateSubKey("shellex\$handlerId")
+        try {
+            $handler.SetValue("", $modes["raster"],
+                [Microsoft.Win32.RegistryValueKind]::String)
+        }
+        finally { $handler.Dispose() }
+    }
+    finally { $root.Dispose() }
+    $root = New-OwnedKey "Software\Classes\$applicationExtension"
+    try {
+        $root.SetValue("", "Applications\Luma.exe", [Microsoft.Win32.RegistryValueKind]::String)
+    }
+    finally { $root.Dispose() }
     # Do not create DisableProcessIsolation, AppID overrides, or global mappings.
     Notify-Associations
 
@@ -319,6 +347,20 @@ manifest.write_text(json.dumps({
             }
             catch {
                 $failures.Add("$label-$phase`: $($_.Exception.Message)")
+            }
+        }
+        $applicationCopy = Join-Path $work ("$index-$($source.BaseName)$applicationExtension")
+        Copy-Item -LiteralPath $source.FullName -Destination $applicationCopy
+        try {
+            Invoke-Captured "$label-application-surrogate" $Harness `
+                @("--surrogate", $applicationCopy) $TimeoutSeconds
+        }
+        catch {
+            $failures.Add("$label-application-surrogate`: $($_.Exception.Message)")
+        }
+        foreach ($checked in @($source.FullName, $copy, $applicationCopy)) {
+            if ((Get-FileHash -LiteralPath $checked -Algorithm SHA256).Hash -ne $case.sha256) {
+                $failures.Add("$label`: source bytes changed: $checked")
             }
         }
     }

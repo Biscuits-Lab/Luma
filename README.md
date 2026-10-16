@@ -6,7 +6,7 @@ A focused, dark desktop image viewer for photography, rendered images and produc
 
 - Open an image or folder; drop files or folders into the window
 - Browse neighboring images and a thumbnail filmstrip
-- Fit, view at 100%, zoom, pan and enter fullscreen
+- Fit at 100%, zoom relative to the fitted size, view actual pixels, pan and enter fullscreen
 - Rotate the display, copy the displayed image, or explicitly save an SDR copy
 - Move a selected file to the recycle bin after confirmation
 - Inspect image information and RGBA channels
@@ -48,7 +48,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 
 This creates a project-local virtual environment, runs tests, collects full dependency license texts and builds `dist\Luma\Luma.exe`. Keep and distribute the entire `Luma` folder, including `_internal`; the EXE alone cannot run. The command's execution-policy override applies only to that PowerShell process. It does not install an application, change file associations, enable startup tasks, or modify a system policy.
 
-PyInstaller builds for its host OS. A Linux smoke bundle is **not** a Windows EXE. The authorized public-repository workflow uses the standard GitHub-hosted Windows runner to test and package a portable ZIP; no installer is created. Native Windows launch, icons, file dialogs, drag/drop and decoder verification remain mandatory before calling a package a Windows release. See [build and test instructions](docs/BUILDING.md).
+PyInstaller builds for its host OS. A Linux smoke bundle is **not** a Windows EXE. The candidate workflow uses the standard GitHub-hosted Windows runner to test and package both a portable ZIP and a current-user Windows installer. See [installer details](packaging/windows/README.md). It does not publish a release automatically. Native Windows launch, icons, file dialogs, drag/drop and decoder verification remain mandatory before calling a package a Windows release. See [build and test instructions](docs/BUILDING.md).
 
 ## Tests
 
@@ -65,13 +65,17 @@ Offscreen tests can exercise logic and widgets; they do not certify native Windo
 
 Use the ellipsis menu at the upper left for Save As, Copy, Open, and Settings. Rotation and confirmed recycle-bin deletion have adjacent buttons. The compact Windows title bar keeps the filename centered. Information and the thumbnail filmstrip start hidden. The lower-left controls show the filmstrip toggle, compact format/dimensions/file-size details, and then the information toggle. The 34 px title bar shares the canvas’s neutral dark gray background; the 36 px bottom bar is slightly lighter, without dividing lines. Zoom and fullscreen controls are at the lower right.
 
+## Explorer thumbnails
+
+The Windows installer prepares Luma-owned thumbnail handlers automatically. A packaged portable copy performs a safe background registration check on ordinary first launch. Choose Luma yourself in Windows Default Apps; no extra thumbnail checkbox is needed. Settings offers status and repair if a bundle moved or registration conflicts. Existing unrelated providers/default choices are preserved. See [supported limits and troubleshooting](docs/EXPLORER_THUMBNAILS.md). Source/development runs and headless worker/smoke modes never auto-register.
+
 ## Keyboard shortcuts
 
 Ctrl+O opens an image; Ctrl+Shift+O opens a folder. Left/Right browse, Home/End jump to the first/last item. F fits, 1 shows actual pixels, +/− or the wheel zooms, drag pans, and double-click toggles fit/actual pixels. I toggles information, T toggles thumbnails, F11 toggles fullscreen, Esc leaves fullscreen/cancels work, Ctrl+0 resets the display, and Ctrl+Q quits.
 
 ## Memory use
 
-Navigation caching is bounded to 256 MiB; the active decoded image is retained separately so exposure changes can re-render without decoding again. Large source arrays therefore still need memory beyond the cache budget. Display transforms run in 128-row strips to limit temporary rendering allocations.
+Decoded navigation caching is bounded to 256 MiB, display-ready RGBA caching to 128 MiB, and filmstrip caching to 8 MiB. The active decoded image, Qt display pixels and temporary decoding/rendering arrays need additional memory. One bounded idle prefetch runs on the same worker for eligible JPEG/PNG/WebP images; foreground requests take priority and obsolete cooperative work stops. HDR/EXR/RAW are never speculatively decoded. Display transforms run in strips. See [measured performance and reproduction](docs/PERFORMANCE.md).
 
 ## Packaging and licensing
 

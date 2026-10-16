@@ -1,0 +1,62 @@
+{
+  "baseline_commit": "ada8d4beceedb7ef336401c80c546f5f3e635f08",
+  "conditions": "Linux cloud, Qt offscreen, same fixed fixtures, three alternating fresh processes per version, OS cache warm, 400 ms idle between actions; medians of per-process metrics",
+  "versions": {
+    "baseline": {
+      "imports_seconds": 0.1647415169998112,
+      "sizes": {
+        "3840x2160": {
+          "first": 0.39878996600009486,
+          "next_after_pause_median": 0.3322834809998767,
+          "repeat_median": 0.28614757399986956
+        },
+        "6000x4000": {
+          "first": 0.5931172579998929,
+          "next_after_pause_median": 0.6132999619998145,
+          "repeat_median": 0.47307576200000767
+        }
+      }
+    },
+    "optimized": {
+      "imports_seconds": 0.16136368499996934,
+      "sizes": {
+        "3840x2160": {
+          "first": 0.12658031900014066,
+          "next_after_pause_median": 0.03460259150006095,
+          "repeat_median": 0.03342093250000744
+        },
+        "6000x4000": {
+          "first": 0.3548659329999282,
+          "next_after_pause_median": 0.07712370049989659,
+          "repeat_median": 0.07946932349989311
+        }
+      }
+    }
+  },
+  "fixtures": {
+    "photo-3840x2160-0.jpg": {
+      "bytes": 1797971,
+      "sha256": "b01c63e33e138637d459e570afc2c2adb712d0b789e8c472a7023e95d010be4a"
+    },
+    "photo-3840x2160-1.jpg": {
+      "bytes": 1797977,
+      "sha256": "2facf6d57de23de6e7aeeb2820f8f81e3a4fcbd8b19e66e9e61cd3835497f8a7"
+    },
+    "photo-3840x2160-2.jpg": {
+      "bytes": 1797301,
+      "sha256": "2724d3e8eb5e9e2d18e13c019182b69a9e4b09e23ca6405150a42c088cab80b5"
+    },
+    "photo-6000x4000-0.jpg": {
+      "bytes": 4904360,
+      "sha256": "7c39d7d97b45291ad6d10581b9d2a7f56f0011c9b5401aa7da9cbec3913cd4d2"
+    },
+    "photo-6000x4000-1.jpg": {
+      "bytes": 4905279,
+      "sha256": "1bf9def0ebb2e992f0ca5ccf142944c483b7355f7795e7b00d3fa57d4e4542d3"
+    },
+    "photo-6000x4000-2.jpg": {
+      "bytes": 4905698,
+      "sha256": "1b3311317de46cff591caf7fbff5c34235c706087b5a287f9741150bfcf50906"
+    }
+  }
+}

@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import struct
 import warnings
-from typing import BinaryIO
+from typing import BinaryIO, Callable
 
 import numpy as np
 from PIL import Image, ImageCms, UnidentifiedImageError
@@ -29,6 +29,10 @@ MAX_DECODE_BYTES = 1536 * 1024 * 1024
 MAX_HEADER_BYTES = 65536
 MAX_ICC_BYTES = 4 * 1024 * 1024
 MAX_EXR_CHANNELS = 64
+# Thumbnails never allocate full-source float pixels. This separate ceiling
+# admits common 16K environment maps while bounding parsing work.
+MAX_RADIANCE_PREVIEW_PIXELS = 256_000_000
+MAX_RADIANCE_PREVIEW_EDGE = 1024
 
 RAW_EXTENSIONS = frozenset({
     '.nef', '.nrw', '.cr2', '.cr3', '.crw', '.arw', '.srf', '.sr2', '.dng',
@@ -53,6 +57,15 @@ class UnsupportedImageError(DecodeError):
 
 class ImageTooLargeError(DecodeError):
     """A compressed input, image dimension, or allocation exceeds a ceiling."""
+
+
+class DecodeCancelled(RuntimeError):
+    """Cooperative image work was superseded; this is not a damaged-file error."""
+
+
+def _check_cancelled(cancelled: Callable[[], bool] | None) -> None:
+    if cancelled is not None and cancelled():
+        raise DecodeCancelled('Image operation cancelled.')
 
 
 @dataclass
@@ -109,7 +122,7 @@ def _add_limitation(metadata: dict[str, str], text: str) -> None:
     metadata['Limitations'] = f'{prior}; {text}' if prior else text
 
 
-def decode_image(path: Path) -> ImageData:
+def decode_image(path: Path, *, cancelled: Callable[[], bool] | None = None) -> ImageData:
     """Decode a local image without modifying it, with helpful bounded errors.
 
     RAW camera support depends on the installed LibRaw version and camera model.
@@ -118,6 +131,7 @@ def decode_image(path: Path) -> ImageData:
     """
     path = Path(path).expanduser()
     try:
+        _check_cancelled(cancelled)
         if not path.is_file():
             raise DecodeError(f'Image file does not exist or is not a regular file: {path.name}')
         size = path.stat().st_size
@@ -133,17 +147,18 @@ def decode_image(path: Path) -> ImageData:
         elif suffix == '.exr':
             result = _decode_exr(path)
         elif suffix in {'.hdr', '.rgbe', '.pic'}:
-            result = _decode_radiance(path)
+            result = _decode_radiance(path, cancelled=cancelled)
         elif suffix in PILLOW_EXTENSIONS:
             result = _decode_pillow(path)
         else:
             raise UnsupportedImageError(f'Unsupported image extension: {suffix or "(none)"}.')
+        _check_cancelled(cancelled)
         result.metadata.setdefault('File', path.name)
         result.metadata.setdefault('File size', f'{size:,} bytes')
         result.metadata.setdefault('Dimensions', f'{result.width:,} × {result.height:,}')
         result.metadata.setdefault('Display', '8-bit sRGB; scene-linear sources are tone-mapped for SDR')
         return result
-    except DecodeError:
+    except (DecodeError, DecodeCancelled):
         raise
     except MemoryError as exc:
         raise ImageTooLargeError('There is not enough memory to decode this image safely.') from exc
@@ -298,6 +313,9 @@ def _read_rgbe_scanline(stream: BinaryIO, length: int) -> np.ndarray:
         if (first[2] << 8 | first[3]) != length:
             raise DecodeError('Radiance HDR RLE scanline width does not match its header.')
         for component in range(4):
+            # Expand packets into a byte buffer, not a strided NumPy slice for
+            # every tiny run. NumPy receives one contiguous plane per channel.
+            plane = bytearray(length)
             cursor = 0
             while cursor < length:
                 code = _read_exact(stream, 1)[0]
@@ -305,16 +323,34 @@ def _read_rgbe_scanline(stream: BinaryIO, length: int) -> np.ndarray:
                 if not count or cursor + count > length:
                     raise DecodeError('Invalid or oversized Radiance HDR RLE run.')
                 if code > 128:
-                    scan[cursor:cursor + count, component] = _read_exact(stream, 1)[0]
+                    plane[cursor:cursor + count] = _read_exact(stream, 1) * count
                 else:
-                    scan[cursor:cursor + count, component] = np.frombuffer(_read_exact(stream, count), dtype=np.uint8)
+                    plane[cursor:cursor + count] = _read_exact(stream, count)
                 cursor += count
+            scan[:, component] = np.frombuffer(plane, dtype=np.uint8)
         return scan
+
+    # The overwhelmingly common non-RLE case is an entire literal scanline.
+    # Read it in one block and locate legacy markers with vectorized comparisons
+    # rather than doing a Python read and assignment for every source pixel.
+    # A legacy run may mean this read includes later scanlines; rewind before
+    # parsing the first marker so the stream remains positioned exactly.
+    payload = first + stream.read((length - 1) * 4)
+    available = len(payload) // 4
+    literals = np.frombuffer(payload, dtype=np.uint8, count=available * 4).reshape(-1, 4)
+    markers = np.flatnonzero((literals[:, 0] == 1) & (literals[:, 1] == 1) & (literals[:, 2] == 1))
+    if not markers.size:
+        if len(payload) != length * 4:
+            raise DecodeError('Truncated Radiance HDR pixel data.')
+        return literals
+    prefix = int(markers[0])
+    scan[:prefix] = literals[:prefix]
+    stream.seek(prefix * 4 - len(payload), 1)
 
     # Old RGBE run markers are (1,1,1,count). Consecutive markers add high
     # bytes to the repeat count. Bounds are checked before filling any run.
-    cursor, shift = 0, 0
-    pixel = first
+    cursor, shift = prefix, 0
+    pixel = _read_exact(stream, 4)
     while cursor < length:
         if pixel[:3] == b'\x01\x01\x01':
             if cursor == 0 or shift > 24:
@@ -334,7 +370,8 @@ def _read_rgbe_scanline(stream: BinaryIO, length: int) -> np.ndarray:
     return scan
 
 
-def _decode_radiance(path: Path) -> ImageData:
+def _decode_radiance(path: Path, *, cancelled: Callable[[], bool] | None = None,
+                     preview_edge: int | None = None) -> ImageData:
     with path.open('rb') as stream:
         signature = stream.readline(4097).rstrip(b'\r\n')
         if signature not in (b'#?RADIANCE', b'#?RGBE'):
@@ -363,22 +400,52 @@ def _decode_radiance(path: Path) -> ImageData:
         major_sign, major_axis, major_count, minor_sign, minor_axis, minor_count = match.groups()
         major_count, minor_count = int(major_count), int(minor_count)
         width, height = (major_count, minor_count) if major_axis == b'X' else (minor_count, major_count)
-        _check_size(width, height, 16)
-        pixels = np.empty((height, width, 4), dtype=np.float32)
+        if preview_edge is None:
+            _check_size(width, height, 16)
+            output_width, output_height = width, height
+        else:
+            if width <= 0 or height <= 0:
+                raise DecodeError(f'Invalid image dimensions: {width} × {height}.')
+            if max(width, height) > MAX_DIMENSION or width * height > MAX_RADIANCE_PREVIEW_PIXELS:
+                raise ImageTooLargeError('Radiance HDR source exceeds the bounded-preview safety limit.')
+            scale = min(1.0, preview_edge / max(width, height))
+            output_width, output_height = max(1, int(width * scale)), max(1, int(height * scale))
+            _check_size(output_width, output_height, 16)
+        _check_cancelled(cancelled)
+        pixels = np.empty((output_height, output_width, 4), dtype=np.float32)
         pixels[..., 3] = 1.0
+        output_major, output_minor = ((output_height, output_width) if major_axis == b'Y'
+                                      else (output_width, output_height))
+        # Sample only selected RGBE pixels before float conversion. Work memory
+        # is one encoded scanline plus the small output, even for 16K sources.
+        major_indices = ((np.arange(output_major) + 0.5) * major_count / output_major).astype(np.int32)
+        minor_indices = ((np.arange(output_minor) + 0.5) * minor_count / output_minor).astype(np.int32)
+        major_forward = major_sign == (b'-' if major_axis == b'Y' else b'+')
+        minor_forward = minor_sign == (b'+' if minor_axis == b'X' else b'-')
+        if not major_forward:
+            major_indices = major_count - 1 - major_indices[::-1]
+        if not minor_forward:
+            minor_indices = minor_count - 1 - minor_indices[::-1]
+        next_output = 0
         for index in range(major_count):
+            _check_cancelled(cancelled)
             rgbe = _read_rgbe_scanline(stream, minor_count)
+            if next_output >= output_major or index != major_indices[next_output]:
+                continue
+            if output_minor != minor_count:
+                rgbe = rgbe[minor_indices]
             exponent = rgbe[:, 3].astype(np.int32)
             # Decode the center of each quantization bin, as Radiance's
             # reference colr_color implementation does; exponent zero is black.
             rgb = np.ldexp(rgbe[:, :3].astype(np.float32) + 0.5, exponent[:, None] - 136)
             rgb[exponent == 0] = 0
             if major_axis == b'Y':
-                row = index if major_sign == b'-' else height - 1 - index
+                row = next_output if major_sign == b'-' else output_height - 1 - next_output
                 pixels[row, :, :3] = rgb if minor_sign == b'+' else rgb[::-1]
             else:
-                column = index if major_sign == b'+' else width - 1 - index
+                column = next_output if major_sign == b'+' else output_width - 1 - next_output
                 pixels[:, column, :3] = rgb if minor_sign == b'-' else rgb[::-1]
+            next_output += 1
         metadata = {
             'Format': 'Radiance HDR / RGBE', 'Decoder': 'Luma native RGBE',
             'Source depth': '8-bit RGB mantissas + shared 8-bit exponent',
@@ -390,7 +457,38 @@ def _decode_radiance(path: Path) -> ImageData:
         for key in ('EXPOSURE', 'GAMMA', 'PRIMARIES', 'COLORCORR', 'PIXASPECT', 'SOFTWARE'):
             if key in header:
                 metadata[f'Radiance {key}'] = _limited_text(header[key])
+        if preview_edge is not None:
+            metadata['Source dimensions'] = f'{width:,} × {height:,}'
+            _add_limitation(metadata, 'Bounded pixel-center sampled thumbnail; full-resolution source is not retained')
         return ImageData(path, pixels, True, metadata)
+
+
+def decode_radiance_thumbnail(path: Path, edge: int, *,
+                               cancelled: Callable[[], bool] | None = None) -> ImageData:
+    """Read a bounded HDR thumbnail without allocating full-source RGB floats.
+
+    All encoded scanlines are validated, but only selected pixel centers are
+    converted. Source dimensions may exceed the full-image pixel ceiling;
+    independent source/file/output limits still apply. This is a preview only.
+    """
+    if isinstance(edge, bool) or not isinstance(edge, int) or not 1 <= edge <= MAX_RADIANCE_PREVIEW_EDGE:
+        raise ValueError(f'Thumbnail edge must be between 1 and {MAX_RADIANCE_PREVIEW_EDGE}.')
+    _check_cancelled(cancelled)
+    path = Path(path).expanduser()
+    try:
+        if not path.is_file():
+            raise DecodeError(f'Image file does not exist or is not a regular file: {path.name}')
+        if path.stat().st_size > MAX_FILE_BYTES:
+            raise ImageTooLargeError('Radiance HDR file exceeds its safety limit.')
+        result = _decode_radiance(path, cancelled=cancelled, preview_edge=edge)
+        _check_cancelled(cancelled)
+        return result
+    except (DecodeError, DecodeCancelled):
+        raise
+    except MemoryError as exc:
+        raise ImageTooLargeError('There is not enough memory to decode this thumbnail safely.') from exc
+    except (OSError, ValueError, RuntimeError, EOFError, struct.error, OverflowError) as exc:
+        raise DecodeError(f'Could not read {path.name}: {_limited_text(exc, 300)}') from exc
 
 
 def _decode_exr(path: Path) -> ImageData:
@@ -524,8 +622,19 @@ def _linear_to_srgb(rgb: np.ndarray) -> np.ndarray:
     return np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * np.power(rgb, 1.0 / 2.4) - 0.055)
 
 
+def _linear_to_srgb_inplace(rgb: np.ndarray) -> None:
+    """The same float32 transfer without several full RGB strip temporaries."""
+    low = rgb <= 0.0031308
+    dark = rgb[low] * 12.92
+    np.power(rgb, 1.0 / 2.4, out=rgb)
+    rgb *= 1.055
+    rgb -= 0.055
+    rgb[low] = dark
+
+
 def render_rgba(image: ImageData, exposure: float = 0.0, channel: str = 'RGBA',
-                tone_map: str = 'Reinhard') -> np.ndarray:
+                tone_map: str = 'Reinhard', *,
+                cancelled: Callable[[], bool] | None = None) -> np.ndarray:
     """Return contiguous 8-bit straight sRGB RGBA without editing source pixels.
 
     Exposure is in stops (bounded to ±32). Tone mapping is applied only to
@@ -534,6 +643,7 @@ def render_rgba(image: ImageData, exposure: float = 0.0, channel: str = 'RGBA',
     transforms. OpenEXR associated color is unpremultiplied before display.
     Processing strips avoids whole-image float temporary allocations.
     """
+    _check_cancelled(cancelled)
     if not math.isfinite(float(exposure)):
         raise ValueError('Exposure must be a finite number of stops.')
     channel = channel.upper()
@@ -555,20 +665,32 @@ def render_rgba(image: ImageData, exposure: float = 0.0, channel: str = 'RGBA',
             index = ('R', 'G', 'B', 'A').index(channel)
             output[..., :3] = image.pixels[..., index:index + 1]
             output[..., 3] = 255
+        _check_cancelled(cancelled)
         return output
     for start in range(0, image.height, 128):
+        _check_cancelled(cancelled)
         block = image.pixels[start:start + 128]
         destination = output[start:start + 128]
-        samples = block.astype(np.float32)
+        # Copy only channels we actually display. Keeping separate contiguous
+        # RGB/alpha workspaces avoids the former RGBA copy followed by another
+        # RGB copy; in-place transforms never touch the source array.
+        alpha = block[..., 3].astype(np.float32)
         if image.pixels.dtype == np.uint8:
-            samples /= 255.0
-        alpha = np.nan_to_num(samples[..., 3], nan=0.0, posinf=1.0, neginf=0.0)
-        alpha = np.clip(alpha, 0.0, 1.0)
+            alpha /= 255.0
+        np.nan_to_num(alpha, copy=False, nan=0.0, posinf=1.0, neginf=0.0)
+        np.clip(alpha, 0.0, 1.0, out=alpha)
         if channel == 'A':
             destination[..., :3] = np.rint(alpha[..., None] * 255.0).astype(np.uint8)
             destination[..., 3] = 255
             continue
-        rgb = np.nan_to_num(samples[..., :3], nan=0.0, posinf=1e20, neginf=0.0)
+        if channel in ('R', 'G', 'B'):
+            index = ('R', 'G', 'B').index(channel)
+            rgb = block[..., index:index + 1].astype(np.float32)
+        else:
+            rgb = block[..., :3].astype(np.float32)
+        if image.pixels.dtype == np.uint8:
+            rgb /= 255.0
+        np.nan_to_num(rgb, copy=False, nan=0.0, posinf=1e20, neginf=0.0)
         np.clip(rgb, 0, 1e20, out=rgb)
         if associated:
             np.divide(rgb, alpha[..., None], out=rgb, where=alpha[..., None] > 1e-8)
@@ -578,15 +700,17 @@ def render_rgba(image: ImageData, exposure: float = 0.0, channel: str = 'RGBA',
         rgb *= factor
         if image.linear:
             if tone == 'reinhard':
-                rgb = rgb / (1.0 + rgb)
+                np.divide(rgb, 1.0 + rgb, out=rgb)
             elif tone in ('aces', 'aces filmic', 'filmic'):
                 # Narkowicz's ACES-fit curve, not a full ACES/OCIO transform.
                 rgb = np.minimum(rgb, 1e6)
                 rgb = (rgb * (2.51 * rgb + 0.03)) / (rgb * (2.43 * rgb + 0.59) + 0.14)
-        rgb = _linear_to_srgb(np.clip(rgb, 0.0, 1.0))
-        if channel in ('R', 'G', 'B'):
-            index = ('R', 'G', 'B').index(channel)
-            rgb = rgb[..., index:index + 1]
-        destination[..., :3] = np.rint(np.clip(rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
+        np.clip(rgb, 0.0, 1.0, out=rgb)
+        _linear_to_srgb_inplace(rgb)
+        np.clip(rgb, 0.0, 1.0, out=rgb)
+        rgb *= 255.0
+        np.rint(rgb, out=rgb)
+        destination[..., :3] = rgb
         destination[..., 3] = np.rint(alpha * 255.0).astype(np.uint8) if channel == 'RGBA' else 255
+    _check_cancelled(cancelled)
     return np.ascontiguousarray(output)

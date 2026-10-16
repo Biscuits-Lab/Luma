@@ -107,12 +107,26 @@ def main() -> int:
     def payloads():
         return sorted(p.parent for p in install_root.glob("versions/*/luma-install.json"))
 
-    def explicit_opt_in(exe):
-        # The isolated runner deliberately opts in using a real packaged EXE/DLL.
+    def set_test_owner(exe):
+        # The isolated runner deliberately stages ownership using a real EXE/DLL.
         # Only the frozen-interpreter guard is bypassed; PE/path checks still run.
         with patch.object(shell, "_runtime_guard", return_value=None):
             shell.install(exe)
-        assert journal() is not None, "Explicit opt-in did not create the ownership journal"
+        assert journal() is not None, "Test-owner registration did not create the journal"
+
+    def assert_owner(exe):
+        document, _ = shell._read_manifest(shell.WinRegistry())
+        assert document is not None and document["state"] == "active"
+        assert shell._owned_by_executable(document["data"], str(exe.resolve(strict=True)))
+        assert document["data"]["thumbnails_enabled"] is True
+        assert defaults() == before_defaults, "Setup changed Windows defaults"
+        hdr = r"Software\Classes\Luma.Image.hdr"
+        assert read_value(winreg.HKEY_CURRENT_USER, hdr + r"\shell\open\command")[0] == f'"{exe.resolve(strict=True)}" "%1"'
+        assert read_value(winreg.HKEY_CURRENT_USER, hdr + "\\shellex\\" + shell.THUMBNAIL_IID)[0] == shell.PROVIDERS["hdr"]
+        assert read_value(winreg.HKEY_CURRENT_USER, shell.CAPABILITIES + r"\FileAssociations", ".hdr")[0] == "Luma.Image.hdr"
+        app_provider = read_value(winreg.HKEY_CURRENT_USER,
+            r"Software\Classes\Applications\Luma.exe\shellex" + "\\" + shell.THUMBNAIL_IID)
+        assert app_provider is not None and app_provider[0] in shell.PROVIDERS.values(), "Open with application route has no Luma thumbnail provider"
 
     def unload():
         nonlocal native
@@ -130,15 +144,31 @@ def main() -> int:
     shortcut = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Luma.lnk"
     desktop = Path(os.environ["USERPROFILE"]) / "Desktop/Luma.lnk"
     assert not shortcut.exists() and not desktop.exists(), "Refusing to overwrite existing Luma shortcuts"
+    conflict_key = r"Software\Classes\Luma.Image.hdr\shellex" + "\\" + shell.THUMBNAIL_IID
+    conflict_value = "{11111111-2222-3333-4444-555555555555}"
+    assert read_value(winreg.HKEY_CURRENT_USER, conflict_key) is None, "Refusing to overwrite an existing provider"
+    conflict_seeded = False
     try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, conflict_key, 0, winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, conflict_value)
+        conflict_seeded = True
+        install(installer, "install-preserves-foreign-provider", expected=10)
+        assert journal() is None and defaults() == before_defaults
+        assert read_value(winreg.HKEY_CURRENT_USER, conflict_key)[0] == conflict_value
+        assert len(payloads()) == 1, "Failed registration must retain installed files for safe retry"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, conflict_key, 0, winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
+            winreg.DeleteValue(key, "")
+        conflict_seeded = False
+        checks.append("automatic registration conflict preserves foreign provider/defaults and reports setup exit 10")
+
         install(installer, "install")
         assert read_value(winreg.HKEY_CURRENT_USER, ARP, "DisplayName")[0] == "Luma"
         assert read_value(winreg.HKEY_LOCAL_MACHINE, ARP, "DisplayName") is None
-        assert journal() is None and defaults() == before_defaults
         assert shortcut.is_file() and not desktop.exists()
         first, = payloads()
+        assert_owner(first / "Luma.exe")
         run([first / "Luma.exe", "--smoke-test"], "installed-exe", timeout=120)
-        checks.append("current-user install, shortcuts, EXE launch, no automatic shell/default changes")
+        checks.append("current-user install, shortcuts, EXE launch, automatic HDR/application-route registration, unchanged defaults")
 
         user_image = install_root / "my-photo.png"
         user_image.write_bytes(b"user-owned image sentinel")
@@ -158,6 +188,7 @@ def main() -> int:
         native = ctypes.WinDLL(str(first / "LumaThumbnail.dll"))
         install(installer, "reinstall-loaded-dll")
         assert payloads() == [first]
+        assert_owner(first / "Luma.exe")
         # A repackaged build with the same app version gets its own immutable path.
         second_bundle = work / "upgrade-bundle"
         shutil.copytree(ROOT / "dist" / "Luma", second_bundle)
@@ -173,13 +204,13 @@ def main() -> int:
         command = "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('" + str(shortcut).replace("'", "''") + "'); $s.TargetPath"
         target = subprocess.check_output(["pwsh", "-NoProfile", "-Command", command], text=True).strip()
         assert Path(target) == second / "Luma.exe"
-        checks.append("loaded native DLL survives reinstall and side-by-side upgrade; shortcut targets latest payload")
+        assert_owner(second / "Luma.exe")
+        checks.append("loaded native DLL survives reinstall and side-by-side upgrade; shortcut and automatic registration target latest payload")
 
-        explicit_opt_in(first / "Luma.exe")
         uninstall("uninstall-loaded-dll", expected=None)
         assert journal() is None and (second / "Luma.exe").is_file()
         unload()
-        explicit_opt_in(first / "Luma.exe")
+        set_test_owner(first / "Luma.exe")
         uninstall("uninstall-all-installed-payloads")
         assert journal() is None
         assert read_value(winreg.HKEY_CURRENT_USER, ARP, "DisplayName") is None
@@ -192,14 +223,16 @@ def main() -> int:
         checks.append("busy uninstall aborts safely; retry removes old owned registration and installed files, preserves images/settings/defaults")
 
         install(installer, "install-for-portable-owner")
-        explicit_opt_in(ROOT / "dist" / "Luma" / "Luma.exe")
+        set_test_owner(ROOT / "dist" / "Luma" / "Luma.exe")
         portable_manifest = journal()
+        install(installer, "reinstall-preserves-portable-owner", expected=10)
+        assert journal() == portable_manifest and defaults() == before_defaults
         uninstall("uninstall-preserves-portable-owner")
         assert journal() == portable_manifest and defaults() == before_defaults
         with patch.object(shell, "_runtime_guard", return_value=None):
             shell.uninstall_if_executable(ROOT / "dist" / "Luma" / "Luma.exe")
         assert journal() is None
-        checks.append("uninstall preserves a different portable copy's registration")
+        checks.append("automatic reinstall and uninstall preserve a different portable copy's registration")
         report["passed"] = True
         return 0
     except Exception as error:
@@ -207,6 +240,9 @@ def main() -> int:
         raise
     finally:
         unload()
+        if conflict_seeded and read_value(winreg.HKEY_CURRENT_USER, conflict_key) == (conflict_value, winreg.REG_SZ):
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, conflict_key, 0, winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
+                winreg.DeleteValue(key, "")
         # Only these explicit test-owned paths are candidates; never broad cleanup.
         for exe in [*(p / "Luma.exe" for p in payloads()), ROOT / "dist" / "Luma" / "Luma.exe"]:
             try:

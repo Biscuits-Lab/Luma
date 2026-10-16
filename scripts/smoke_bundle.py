@@ -21,6 +21,50 @@ RAW_URL = f"https://raw.githubusercontent.com/letmaik/rawpy/main/test/{RAW_NAME}
 RAW_BLOB = "e03d193927a604de40fd0fd7a71e33fde878a0e1"
 
 
+def write_hdr_thumbnail_fixture(path: Path, width: int, height: int) -> None:
+    """Bounded independent RGBE encoder for large, compressible HDR fixtures.
+
+    Four horizontal bands and a vertical green gradient exercise content and
+    orientation. These are synthetic resource regressions, not photographic
+    color-quality or worst-case compressed-data benchmarks.
+    """
+    if not 8 <= width <= 32767 or not 1 <= height <= 32768:
+        raise ValueError("Invalid synthetic HDR dimensions")
+    lengths = [width * (band + 1) // 4 - width * band // 4 for band in range(4)]
+
+    def plane(values):
+        data = bytearray()
+        for value, count in zip(values, lengths):
+            full, remainder = divmod(count, 127)
+            data.extend(bytes((255, value)) * full)
+            if remainder:
+                data.extend((128 + remainder, value))
+        return data
+
+    red = plane((48, 96, 160, 224))
+    blue = plane((64, 80, 96, 112))
+    exponent = plane((128, 129, 130, 131))
+    with path.open("wb") as output:
+        output.write(f"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {height} +X {width}\n".encode())
+        for row in range(height):
+            output.write(bytes((2, 2, width >> 8, width & 255)))
+            output.write(red)
+            output.write(plane((32 + row * 160 // height,) * 4))
+            output.write(blue)
+            output.write(exponent)
+
+
+def prepare_hdr_thumbnail_fixtures(destination: Path) -> list[Path]:
+    """4K/8K/16K environment-map sizes, only for the bounded thumbnail path."""
+    destination.mkdir(parents=True, exist_ok=True)
+    files = []
+    for width, height in ((4096, 2048), (8192, 4096), (16384, 8192)):
+        path = destination / f"thumbnail-{width}x{height}.hdr"
+        write_hdr_thumbnail_fixture(path, width, height)
+        files.append(path)
+    return files
+
+
 def prepare_fixtures(destination: Path, include_raw: bool = True) -> list[Path]:
     destination.mkdir(parents=True, exist_ok=True)
     y, x = np.mgrid[0:48, 0:64]

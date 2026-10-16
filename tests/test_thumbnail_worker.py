@@ -175,3 +175,113 @@ def _assert_tiff_storage(path, original, values, orientation, compression):
                                for offset, count in zip(header.tag_v2[273], header.tag_v2[279]))
             expected = values.astype("<u2").tobytes() if values.dtype == np.uint16 else values.tobytes()
             assert encoded == expected
+
+
+@pytest.mark.parametrize("size", [(4096, 2048), (8192, 4096), (16384, 8192)])
+def test_large_hdr_uses_bounded_preview_instead_of_full_decode(tmp_path, monkeypatch, size):
+    import hashlib
+    from luma import decoders
+    from scripts.smoke_bundle import write_hdr_thumbnail_fixture
+    path = tmp_path / "input.hdr"
+    write_hdr_thumbnail_fixture(path, *size)
+    original = hashlib.sha256(path.read_bytes()).digest()
+    monkeypatch.setattr(decoders, "decode_image", lambda *a, **k: pytest.fail("Full float decode must not run"))
+    original_render = decoders.render_rgba
+    seen = []
+
+    def bounded_render(image, *args, **kwargs):
+        seen.append(image.pixels.nbytes)
+        assert image.width <= 256 and image.height <= 256
+        return original_render(image, *args, **kwargs)
+
+    monkeypatch.setattr(decoders, "render_rgba", bounded_render)
+    original_limits = (decoders.MAX_PIXELS, decoders.MAX_DECODE_BYTES)
+    result = thumbnails.generate_thumbnail(path, "hdr", 256)
+    assert result.size == (256, 128)
+    assert seen == [256 * 128 * 16]
+    assert result.getpixel((32, 64)) != result.getpixel((224, 64))
+    assert hashlib.sha256(path.read_bytes()).digest() == original
+    assert (decoders.MAX_PIXELS, decoders.MAX_DECODE_BYTES) == original_limits
+
+
+@pytest.mark.parametrize("dimensions", [(32769, 1), (20000, 20000)])
+def test_hdr_preview_still_rejects_excessive_source_dimensions(tmp_path, dimensions):
+    path = tmp_path / "input.hdr"
+    width, height = dimensions
+    path.write_bytes(f"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {height} +X {width}\n".encode())
+    with pytest.raises(ValueError, match="safety limit"):
+        thumbnails.generate_thumbnail(path, "hdr", 32)
+
+
+def test_generic_executable_provider_sniffs_hdr_and_exr_under_synthetic_png_name(tmp_path):
+    import OpenEXR
+    from scripts.smoke_bundle import write_hdr_thumbnail_fixture
+    path = tmp_path / "input.png"
+    write_hdr_thumbnail_fixture(path, 128, 64)
+    assert thumbnails.generate_thumbnail(path, "raster", 32).size == (32, 16)
+    OpenEXR.File({}, {"RGB": np.ones((12, 24, 3), dtype=np.float32)}).write(str(path))
+    assert thumbnails.generate_thumbnail(path, "raster", 8).size == (8, 4)
+
+
+@pytest.mark.parametrize("format", ["PNG", "JPEG"])
+def test_generic_executable_provider_retains_common_images(tmp_path, format):
+    path = tmp_path / "input.png"
+    Image.new("RGB", (30, 20), "orange").save(path, format=format)
+    original = path.read_bytes()
+    assert thumbnails.generate_thumbnail(path, "raster", 12).size == (12, 8)
+    assert path.read_bytes() == original
+
+
+def test_generic_executable_provider_tries_raw_only_when_pillow_cannot_identify(tmp_path, monkeypatch):
+    path = tmp_path / "input.png"
+    path.write_bytes(b"unknown raw format")
+    calls = []
+    def raw_preview(source, edge):
+        calls.append((source, edge))
+        return Image.new("RGBA", (edge, edge), "red")
+    monkeypatch.setattr(thumbnails, "_raw", raw_preview)
+    assert thumbnails.generate_thumbnail(path, "raster", 12).size == (12, 12)
+    assert calls == [(path, 12)]
+
+
+def test_headless_entry_dispatches_without_importing_qt(tmp_path):
+    folder = tmp_path / "LumaThumb-entry"
+    folder.mkdir()
+    source, output = folder / "input.png", folder / "thumbnail.bin"
+    source.write_bytes(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n" + bytes([128, 64, 32, 129]) * 2)
+    output.write_bytes(b"")
+    code = (
+        "import sys; from luma.__main__ import main; "
+        "result=main(sys.argv[1:]); "
+        "assert not any(k.startswith('PySide6') for k in sys.modules); "
+        "raise SystemExit(result)"
+    )
+    subprocess.run([sys.executable, "-c", code, "--thumbnail-worker", "raster",
+                    str(source), str(output), "32"], check=True, timeout=10)
+    assert output.read_bytes()[:8] == thumbnails.MAGIC
+
+
+def test_generic_raw_tiff_uses_embedded_preview_instead_of_first_tiff_image(tmp_path, monkeypatch):
+    path = tmp_path / "input.png"
+    exif = Image.Exif()
+    exif[50706] = bytes((1, 4, 0, 0))
+    Image.new("RGB", (16, 12), "red").save(path, format="TIFF", exif=exif)
+    called = []
+    def preview(source, edge):
+        called.append((source, edge))
+        return Image.new("RGBA", (edge, edge // 2), "blue")
+    monkeypatch.setattr(thumbnails, "_raw", preview)
+    assert thumbnails.generate_thumbnail(path, "raster", 32).size == (32, 16)
+    assert called == [(path, 32)]
+
+
+def test_generic_nonraw_tagged_tiff_retains_pillow_fallback(tmp_path, monkeypatch):
+    import rawpy
+    path = tmp_path / "input.png"
+    exif = Image.Exif()
+    exif[50706] = bytes((1, 4, 0, 0))
+    Image.new("RGB", (16, 12), "red").save(path, format="TIFF", exif=exif)
+    def unsupported(*args):
+        raise rawpy.LibRawFileUnsupportedError()
+    monkeypatch.setattr(thumbnails, "_raw", unsupported)
+    assert thumbnails.generate_thumbnail(path, "raster", 32).size == (16, 12)

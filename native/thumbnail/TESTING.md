@@ -41,17 +41,23 @@ BGRA=(0,0,255,128), retaining straight alpha.
 Run scripts/smoke_thumbnails.py only on a disposable Windows CI runner, before
 persistent installer-registration tests. The Python entry point launches the
 PowerShell 7.2 script with the current Python interpreter. It uses the built harness and bundle,
-prepares the existing hash-pinned fixture set, and covers PNG, HDR, EXR, real NEF,
-a Unicode source name, and the explicit alpha fixture.
+prepares the hash-pinned fixture set, and covers PNG/JPEG, HDR, EXR, real NEF,
+a Unicode source name, the explicit alpha fixture, and compressible synthetic
+4K/8K/16K HDR environment-map dimensions. Those large fixtures exercise the
+unchanged ten-second/768-MiB worker envelope; they are not worst-case benchmarks.
 
-The script refuses existing provider CLSID registrations. It registers only
-previously absent provider CLSIDs and unique temporary file extensions under
+The script refuses existing provider CLSID and Applications\\Luma.exe registrations.
+It registers only previously absent provider CLSIDs, that owned application key,
+and unique temporary file extensions under
 HKCU, sets ThreadingModel=Apartment, and never disables process isolation. It
 cleans only its created registration roots and temporary fixture paths, preserving
 diagnostic artifacts. It does not change normal image-extension associations,
 the default viewer, or registrations on the user's computer.
 
-Each real fixture has a bounded direct-COM preflight and a separate cache request:
+Each real fixture has a bounded direct-COM preflight, a per-format cache request,
+and an Applications\\Luma.exe content-aware cache request. The last route uses
+a disposable extension default naming the application ProgID, without touching
+UserChoice or real image-extension defaults:
 
     thumbnail_tests.exe --surrogate path/to/fixture
 

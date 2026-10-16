@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 import re
 import threading
@@ -66,9 +67,11 @@ class LatestWorker(QObject):
     completed = Signal(int, object)
     failed = Signal(int, str)
 
-    def __init__(self, handler, parent=None):
+    def __init__(self, handler, parent=None, *, idle_handler=None):
         super().__init__(parent)
         self.handler = handler
+        self.idle_handler = idle_handler
+        self._idle = None
         self._condition = threading.Condition()
         self._pending = None
         self._generation = 0
@@ -80,13 +83,24 @@ class LatestWorker(QObject):
         with self._condition:
             self._generation += 1
             self._pending = (self._generation, payload)
+            self._idle = None
             self._condition.notify()
             return self._generation
+
+    def submit_idle(self, payload):
+        """One replaceable, lower-priority prefetch slot; never emits UI results."""
+        if self.idle_handler is None:
+            return
+        with self._condition:
+            if not self._closed and self._pending is None:
+                self._idle = (self._generation, payload)
+                self._condition.notify()
 
     def cancel(self):
         with self._condition:
             self._generation += 1
             self._pending = None
+            self._idle = None
 
     def current(self, token):
         with self._condition:
@@ -96,50 +110,113 @@ class LatestWorker(QObject):
         with self._condition:
             self._closed = True
             self._pending = None
+            self._idle = None
             self._condition.notify()
 
     def _run(self):
         while True:
             with self._condition:
-                self._condition.wait_for(lambda: self._pending is not None or self._closed)
+                self._condition.wait_for(lambda: self._pending is not None or self._idle is not None or self._closed)
                 if self._closed:
                     return
-                token, payload = self._pending
-                self._pending = None
+                idle = self._pending is None
+                token, payload = self._idle if idle else self._pending
+                if idle:
+                    self._idle = None
+                else:
+                    self._pending = None
             try:
-                result = self.handler(payload, lambda: not self.current(token))
-                if self.current(token):
+                handler = self.idle_handler if idle else self.handler
+                result = handler(payload, lambda: not self.current(token))
+                if not idle and self.current(token):
                     self.completed.emit(token, result)
             except Exception as error:
-                if self.current(token):
+                if not idle and self.current(token):
                     self.failed.emit(token, str(error) or type(error).__name__)
 
 
+@dataclass
+class RenderedFrame:
+    rgba: object
+    width: int
+    height: int
+    linear: bool
+    metadata: dict
+    channel_names: tuple
+
+    @property
+    def nbytes(self):
+        return self.rgba.nbytes
+
+
 class ImageService:
-    def __init__(self, budget=256 * 1024 * 1024):
+    """Single-worker owned caches: decoded bytes plus separately bounded RGBA frames.
+
+    Prefetch runs in the same worker only while foreground work is idle, so cache
+    operations are serialized. A new request cancels cooperative work and replaces
+    the one pending prefetch. Native Pillow loads cannot be interrupted mid-call.
+    """
+    def __init__(self, budget=256 * 1024 * 1024, render_budget=None):
         self.cache = ByteCache(budget)
+        self.render_cache = ByteCache(budget // 2 if render_budget is None else render_budget)
         self.current_key = None
         self.current_image = None
 
-    def __call__(self, request, cancelled):
-        path, exposure, channel, tone = request
+    @staticmethod
+    def _key(path):
         stat = path.stat()
-        key = (str(path), stat.st_mtime_ns, stat.st_size)
-        data = self.current_image if key == self.current_key else self.cache.get(key)
-        if data is None:
-            data = decode_image(path)
-            if cancelled():
-                return None
-            self.cache.put(key, data)
-        # One active image is separate from the bounded navigation cache.
-        # This lets exposure changes reuse a large RAW that exceeds that cache.
-        self.current_key, self.current_image = key, data
+        return str(path), stat.st_mtime_ns, stat.st_size
+
+    def __call__(self, request, cancelled):
+        return self._load(request, cancelled, activate=True)
+
+    def _load(self, request, cancelled, *, activate):
+        path, exposure, channel, tone = request
         if cancelled():
             return None
-        rgba = render_rgba(data, exposure, channel, tone)
-        return dict(path=path, rgba=rgba, width=data.width, height=data.height,
-                    linear=data.linear, metadata=data.metadata,
-                    channel_names=data.channel_names, cache_bytes=self.cache.bytes)
+        key = self._key(path)
+        render_key = (key, float(exposure), channel.upper(), tone.casefold())
+        frame = self.render_cache.get(render_key)
+        data = self.current_image if key == self.current_key else self.cache.get(key)
+        if frame is None:
+            if data is None:
+                data = decode_image(path, cancelled=cancelled)
+                if cancelled() or self._key(path) != key:
+                    return None
+                self.cache.put(key, data)
+            if cancelled():
+                return None
+            rgba = render_rgba(data, exposure, channel, tone, cancelled=cancelled)
+            if cancelled() or self._key(path) != key:
+                return None
+            frame = RenderedFrame(rgba, data.width, data.height, data.linear,
+                                  data.metadata, data.channel_names)
+            self.render_cache.put(render_key, frame)
+        if activate:
+            # Active oversized images stay available for repeated exposure edits.
+            self.current_key, self.current_image = key, data
+        if cancelled():
+            return None
+        return dict(path=path, rgba=frame.rgba, width=frame.width, height=frame.height,
+                    linear=frame.linear, metadata=frame.metadata,
+                    channel_names=frame.channel_names, cache_bytes=self.cache.bytes,
+                    render_cache_bytes=self.render_cache.bytes)
+
+    def prefetch(self, request, cancelled):
+        path = request[0]
+        # Keep speculative work small and quick. Never launch a full RAW/EXR/HDR
+        # decode in front of the user's next request or retain two giant float images.
+        if path.suffix.lower() not in {'.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.webp'}:
+            return None
+        if cancelled() or path.stat().st_size > 32 * 1024 * 1024:
+            return None
+        with Image.open(path) as source:
+            width, height = source.size
+            byte_size = width * height * 4
+            if width * height > 24_000_000 or byte_size > min(self.cache.budget, self.render_cache.budget):
+                return None
+        self._load(request, cancelled, activate=False)
+        return None
 
 
 def scan_folder(request, cancelled):
@@ -148,7 +225,25 @@ def scan_folder(request, cancelled):
     return directory, files, selected
 
 
-def thumbnail_batch(paths, cancelled):
+@dataclass
+class ThumbnailData:
+    size: tuple
+    pixels: bytes
+
+    @property
+    def nbytes(self):
+        return len(self.pixels)
+
+
+class ThumbnailService:
+    def __init__(self, budget=8 * 1024 * 1024):
+        self.cache = ByteCache(budget)
+
+    def __call__(self, paths, cancelled):
+        return thumbnail_batch(paths, cancelled, cache=self.cache)
+
+
+def thumbnail_batch(paths, cancelled, *, cache=None):
     """Small thumbnails for Pillow formats. RAW/HDR get a labelled placeholder.
 
     Loading a second full-resolution RAW/EXR solely for a thumbnail is deliberately
@@ -161,6 +256,12 @@ def thumbnail_batch(paths, cancelled):
         if path.suffix.lower() in RAW_EXTENSIONS | {'.exr', '.hdr', '.rgbe', '.pic'}:
             continue
         try:
+            stat = path.stat()
+            key = (str(path), stat.st_mtime_ns, stat.st_size)
+            cached = cache.get(key) if cache is not None else None
+            if cached is not None:
+                result[str(path)] = (cached.size, cached.pixels)
+                continue
             with Image.open(path) as source:
                 if source.width * source.height > 32_000_000:
                     continue
@@ -168,7 +269,10 @@ def thumbnail_batch(paths, cancelled):
                 thumb = ImageOps.exif_transpose(source)
                 thumb.thumbnail((160, 110))
                 rgba = thumb.convert('RGBA')
-                result[str(path)] = (rgba.size, rgba.tobytes())
+                pixels = rgba.tobytes()
+                result[str(path)] = (rgba.size, pixels)
+                if cache is not None and not cancelled():
+                    cache.put(key, ThumbnailData(rgba.size, pixels))
         except (OSError, ValueError, Image.DecompressionBombError):
             pass
     return result

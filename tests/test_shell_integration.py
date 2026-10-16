@@ -669,3 +669,183 @@ def test_interrupted_disable_recovers_then_disables_on_explicit_retry():
     assert disable_thumbnails(registry).recovered
     assert si.status(registry).state == "association_only"
     assert si.status(registry).thumbnails_enabled is False
+
+
+def test_executable_association_has_owned_content_aware_handler():
+    key = si._key(si.CLASSES, "Applications", "Luma.exe", "shellex", si.THUMBNAIL_IID)
+    assert plan_map()[key, ""] == si.Value(si.REG_SZ, si.PROVIDERS["raster"])
+    registry = FakeRegistry()
+    foreign = si.Value(si.REG_SZ, THIRD_PARTY)
+    registry.seed(key, "", foreign)
+    before = copy.deepcopy(registry.values)
+    with pytest.raises(si.RegistrationConflict):
+        install(registry)
+    assert registry.values == before
+
+
+def restricted_install(registry, exe=EXE, allowed=()):
+    with patch.object(si, "_runtime_guard"), patch.object(si, "_checked_executable", return_value=exe):
+        return si.install(Path(exe), registry=registry, allowed_previous_executables=allowed)
+
+
+def test_automatic_registration_accepts_same_copy_and_explicit_upgrade_owners():
+    registry = FakeRegistry()
+    assert restricted_install(registry).changed_values > 0
+    assert restricted_install(registry).changed_values == 0
+    assert restricted_install(registry, OTHER_EXE, (EXE,)).changed_values > 0
+    assert si.status(registry).state == "installed"
+
+
+def test_automatic_registration_refuses_other_portable_owner_without_mutation():
+    registry = FakeRegistry()
+    install(registry)
+    before = copy.deepcopy(registry.values)
+    log = list(registry.log)
+    with pytest.raises(si.RegistrationConflict, match="another Luma copy"):
+        restricted_install(registry, OTHER_EXE)
+    assert registry.values == before
+    assert registry.log == log
+
+
+def test_automatic_registration_does_not_recover_another_owners_pending_move():
+    registry = FakeRegistry()
+    install(registry)
+    registry.crash_on = registry.target_calls + 2
+    with pytest.raises(SimulatedCrash):
+        install(registry, OTHER_EXE)
+    before = copy.deepcopy(registry.values)
+    log = list(registry.log)
+    with pytest.raises(si.RegistrationConflict, match="another Luma copy"):
+        restricted_install(registry, OTHER_EXE)
+    assert registry.values == before
+    assert registry.log == log
+    # The validated same-installation allowlist can recover both snapshots.
+    assert restricted_install(registry, OTHER_EXE, (EXE,)).recovered
+
+
+def startup(registry, monkeypatch, exe=EXE):
+    monkeypatch.setattr(si.sys, "platform", "win32")
+    monkeypatch.setattr(si.sys, "frozen", True, raising=False)
+    with patch.object(si, "_runtime_guard"), patch.object(si, "_checked_executable", return_value=exe):
+        return si.prepare_startup_registration(Path(exe), registry)
+
+
+def test_packaged_startup_registers_once_and_healthy_reopens_are_read_only(monkeypatch):
+    registry = FakeRegistry()
+    assert startup(registry, monkeypatch).changed_values > 0
+    before = list(registry.log)
+    assert startup(registry, monkeypatch).changed_values == 0
+    assert registry.log == before
+
+
+def test_startup_does_not_adopt_foreign_changes_or_another_copy(monkeypatch):
+    registry = FakeRegistry()
+    install(registry)
+    with pytest.raises(si.RegistrationConflict):
+        startup(registry, monkeypatch, OTHER_EXE)
+    key = si._key(si.CLASSES, "Luma.Image.hdr", "shellex", si.THUMBNAIL_IID)
+    registry.seed(key, "", si.Value(si.REG_SZ, THIRD_PARTY))
+    before = copy.deepcopy(registry.values)
+    with pytest.raises(si.RegistrationConflict, match="preserved"):
+        startup(registry, monkeypatch)
+    assert registry.values == before
+
+
+def test_source_startup_never_mutates_registry(monkeypatch):
+    registry = FakeRegistry()
+    monkeypatch.setattr(si.sys, "frozen", False, raising=False)
+    assert si.prepare_startup_registration(Path(EXE), registry).changed_values == 0
+    assert not registry.log
+
+
+def test_effective_association_query_preserves_provider_before_manual_fallback(monkeypatch):
+    registry = object.__new__(si.WinRegistry)
+    monkeypatch.setattr(si, "_association_string", lambda extension, kind, extra=None: THIRD_PARTY)
+    registry._read = lambda *args: pytest.fail("Effective Shell provider must take precedence")
+    assert registry.provider_for(".png") == THIRD_PARTY
+    assert registry.effective_provider_for(".hdr") == THIRD_PARTY
+
+
+@pytest.mark.parametrize("value", [None, "not-a-guid", "{broken}"])
+def test_effective_association_rejects_malformed_provider(monkeypatch, value):
+    registry = object.__new__(si.WinRegistry)
+    monkeypatch.setattr(si, "_association_string", lambda *args: value)
+    assert registry.effective_provider_for(".hdr") is None
+
+
+def test_hdr_status_discloses_executable_association_and_missing_provider(monkeypatch):
+    registry = object.__new__(si.WinRegistry)
+    monkeypatch.setattr(si, "_association_string",
+                        lambda extension, kind, extra=None: r"Applications\Luma.exe" if kind == 20 else None)
+    detail = si._hdr_association_detail(registry)
+    assert "did not report" in detail and "Open With" in detail and "Default Apps" in detail
+    monkeypatch.setattr(si, "_association_string", lambda *args: si.PROVIDERS["raster"])
+    assert "selects Luma" in si._hdr_association_detail(registry)
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_automatic_upgrade_accepts_old_plan_without_executable_thumbnail_handler(disabled):
+    registry = FakeRegistry()
+    install(registry)
+    key = si._key(si.CLASSES, "Applications", "Luma.exe", "shellex", si.THUMBNAIL_IID)
+    if disabled:
+        disable_thumbnails(registry)
+    document, _ = si._read_manifest(registry)
+    document["data"]["entries"] = [e for e in document["data"]["entries"] if e["key"] != key]
+    registry.values.pop(registry.address(key, ""), None)
+    registry.seed(si.METADATA_KEY, si.MANIFEST_NAME, si._manifest_value(document))
+    assert restricted_install(registry, OTHER_EXE, (EXE,)).changed_values > 0
+    assert registry.read(key, "") == si.Value(si.REG_SZ, si.PROVIDERS["raster"])
+    assert si.status(registry).thumbnails_enabled
+    uninstall(registry)
+    assert registry.values == {}
+
+
+def test_association_query_is_bounded_and_disables_registry_fixups(monkeypatch):
+    calls = []
+    class Query:
+        def __call__(self, flags, kind, extension, extra, buffer, length):
+            calls.append((flags, kind, extension, extra, len(buffer)))
+            buffer.value = THIRD_PARTY
+            length._obj.value = len(THIRD_PARTY) + 1
+            return 0
+    class Library:
+        AssocQueryStringW = Query()
+    monkeypatch.setattr(si.ctypes, "WinDLL", lambda name: Library(), raising=False)
+    assert si._association_string(".hdr", 16, si.THUMBNAIL_IID) == THIRD_PARTY
+    assert calls == [(0x120, 16, ".hdr", si.THUMBNAIL_IID, si.MAX_VALUE_CHARS)]
+    with pytest.raises(si.ShellIntegrationError):
+        si._association_string(".unexpected", 16)
+
+
+@pytest.mark.parametrize("hr,length", [(1, 39), (-1, 39), (0, 0), (0, 4097)])
+def test_association_query_never_accepts_failed_or_unbounded_results(monkeypatch, hr, length):
+    class Query:
+        def __call__(self, flags, kind, extension, extra, buffer, output_length):
+            buffer.value = THIRD_PARTY
+            output_length._obj.value = length
+            return hr
+    class Library:
+        AssocQueryStringW = Query()
+    monkeypatch.setattr(si.ctypes, "WinDLL", lambda name: Library(), raising=False)
+    assert si._association_string(".hdr", 16, si.THUMBNAIL_IID) is None
+
+
+def test_repair_after_executable_selection_preserves_per_format_common_provider():
+    registry = FakeRegistry()
+    registry.handlers[".png"] = THIRD_PARTY
+    install(registry)
+    registry.handlers[".png"] = si.PROVIDERS["raster"]
+    assert install(registry).changed_values == 0
+    key = si._key(si.CLASSES, "Luma.Image.png", "shellex", si.THUMBNAIL_IID)
+    assert registry.read(key, "") == si.Value(si.REG_SZ, THIRD_PARTY)
+
+
+def test_executable_handler_uninstall_keeps_later_foreign_change():
+    registry = FakeRegistry()
+    install(registry)
+    key = si._key(si.CLASSES, "Applications", "Luma.exe", "shellex", si.THUMBNAIL_IID)
+    foreign = si.Value(si.REG_SZ, THIRD_PARTY)
+    registry.seed(key, "", foreign)
+    assert uninstall(registry).preserved_values == 1
+    assert registry.read(key, "") == foreign

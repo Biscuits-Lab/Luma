@@ -1,0 +1,182 @@
+{
+  "warm": {
+    "gradient-4k-flat.hdr": {
+      "decode_s": {
+        "baseline": 3.988798595999924,
+        "optimized": 0.17883131700000376
+      },
+      "render_s": {
+        "baseline": 0.2520492830001331,
+        "optimized": 0.17933308500005296
+      },
+      "total_s": {
+        "baseline": 4.273476298000105,
+        "optimized": 0.36053191600012724
+      },
+      "peak_rss_mib": {
+        "baseline": 233.3515625,
+        "optimized": 206.53515625
+      },
+      "speedup_total": 11.85325378516169,
+      "sha256": "320c1c108957a6d862a06d993dc28152b63ca3c9ed8d5ecda9ac2cf9a33a6b18"
+    },
+    "gradient-4k-rle.hdr": {
+      "decode_s": {
+        "baseline": 0.43705446499984646,
+        "optimized": 0.28948737599989727
+      },
+      "render_s": {
+        "baseline": 0.2507602620000853,
+        "optimized": 0.18474003400001493
+      },
+      "total_s": {
+        "baseline": 0.6860257639998508,
+        "optimized": 0.47739780599999904
+      },
+      "peak_rss_mib": {
+        "baseline": 233.3515625,
+        "optimized": 206.55078125
+      },
+      "speedup_total": 1.4370107180590022,
+      "sha256": "320c1c108957a6d862a06d993dc28152b63ca3c9ed8d5ecda9ac2cf9a33a6b18"
+    },
+    "gradient-8k-flat.hdr": {
+      "decode_s": {
+        "baseline": 17.132106725000085,
+        "optimized": 0.6722315780000372
+      },
+      "render_s": {
+        "baseline": 1.021396133000053,
+        "optimized": 0.7843820989999131
+      },
+      "total_s": {
+        "baseline": 18.15681048400006,
+        "optimized": 1.4566136769999503
+      },
+      "peak_rss_mib": {
+        "baseline": 749.11328125,
+        "optimized": 712.68359375
+      },
+      "speedup_total": 12.465083069517739,
+      "sha256": "61831e69c0b8d6bc7406ec3601d95595b51716106ec20b587bea39f8e5d9e89a"
+    },
+    "gradient-8k-rle.hdr": {
+      "decode_s": {
+        "baseline": 1.7226209610000751,
+        "optimized": 1.0896960269999454
+      },
+      "render_s": {
+        "baseline": 1.0697354779999841,
+        "optimized": 0.8778593340000498
+      },
+      "total_s": {
+        "baseline": 2.797452476999979,
+        "optimized": 1.986505952000016
+      },
+      "peak_rss_mib": {
+        "baseline": 749.11328125,
+        "optimized": 712.68359375
+      },
+      "speedup_total": 1.408227583805375,
+      "sha256": "61831e69c0b8d6bc7406ec3601d95595b51716106ec20b587bea39f8e5d9e89a"
+    }
+  },
+  "fresh": {
+    "gradient-4k-flat.hdr": {
+      "decode_s": {
+        "baseline": 4.288544887999933,
+        "optimized": 0.23723161499992784
+      },
+      "render_s": {
+        "baseline": 0.35233560400001807,
+        "optimized": 0.21297311300008914
+      },
+      "total_s": {
+        "baseline": 4.640880491999951,
+        "optimized": 0.450204728000017
+      },
+      "peak_rss_mib": {
+        "baseline": 230.37890625,
+        "optimized": 207.1953125
+      },
+      "process_wall_s": {
+        "baseline": 4.785645754999905,
+        "optimized": 0.5900282690001859
+      },
+      "speedup_total": 10.308377951996489,
+      "sha256": "320c1c108957a6d862a06d993dc28152b63ca3c9ed8d5ecda9ac2cf9a33a6b18"
+    },
+    "gradient-4k-rle.hdr": {
+      "decode_s": {
+        "baseline": 0.432507674000135,
+        "optimized": 0.28057725999997274
+      },
+      "render_s": {
+        "baseline": 0.32768222400000013,
+        "optimized": 0.1905554889999621
+      },
+      "total_s": {
+        "baseline": 0.7601898980001351,
+        "optimized": 0.47113274899993485
+      },
+      "peak_rss_mib": {
+        "baseline": 230.12109375,
+        "optimized": 207.4921875
+      },
+      "process_wall_s": {
+        "baseline": 0.9489146189998792,
+        "optimized": 0.5979740420000326
+      },
+      "speedup_total": 1.6135365236523609,
+      "sha256": "320c1c108957a6d862a06d993dc28152b63ca3c9ed8d5ecda9ac2cf9a33a6b18"
+    },
+    "gradient-8k-flat.hdr": {
+      "decode_s": {
+        "baseline": 17.21219753499986,
+        "optimized": 0.7315797129999737
+      },
+      "render_s": {
+        "baseline": 1.2979319070000201,
+        "optimized": 0.7582593140000427
+      },
+      "total_s": {
+        "baseline": 18.51012944199988,
+        "optimized": 1.4898390270000164
+      },
+      "peak_rss_mib": {
+        "baseline": 746.203125,
+        "optimized": 695.6953125
+      },
+      "process_wall_s": {
+        "baseline": 18.750432391000004,
+        "optimized": 1.6850491069999407
+      },
+      "speedup_total": 12.424247926483991,
+      "sha256": "61831e69c0b8d6bc7406ec3601d95595b51716106ec20b587bea39f8e5d9e89a"
+    },
+    "gradient-8k-rle.hdr": {
+      "decode_s": {
+        "baseline": 1.5419833720000042,
+        "optimized": 1.0181626599999163
+      },
+      "render_s": {
+        "baseline": 1.181379594999953,
+        "optimized": 0.7539340230000562
+      },
+      "total_s": {
+        "baseline": 2.7233629669999573,
+        "optimized": 1.7720966829999725
+      },
+      "peak_rss_mib": {
+        "baseline": 747.55859375,
+        "optimized": 696.55859375
+      },
+      "process_wall_s": {
+        "baseline": 2.9087785080000685,
+        "optimized": 1.954793367999855
+      },
+      "speedup_total": 1.5368026999461404,
+      "sha256": "61831e69c0b8d6bc7406ec3601d95595b51716106ec20b587bea39f8e5d9e89a"
+    }
+  }
+}

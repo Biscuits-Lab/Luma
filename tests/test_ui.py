@@ -72,13 +72,13 @@ def test_open_navigation_channels_panels_fullscreen_and_read_only(qapp, tmp_path
     win.canvas.zoom(2)
     assert abs(win.canvas.transform().m11() * win.canvas.viewport().devicePixelRatioF() - 2) < .001
     win.zoom_slider.setValue(20)
-    assert abs(win.canvas.transform().m11() * win.canvas.viewport().devicePixelRatioF() - 2) < .001
+    assert win.canvas.zoom_percent == 200
     win.canvas.fit()
     assert win.canvas.fitted
     assert abs(win.filename.mapTo(win, win.filename.rect().center()).x() - win.rect().center().x()) <= 2
     assert any('Settings' in action.text() for action in win.app_menu.actions())
     win.channel.setCurrentText('A')
-    wait_for(qapp, lambda: not win.render_timer.isActive() and not win.cancel_button.isVisible())
+    wait_for(qapp, lambda: not win.render_timer.isActive() and not win._pending_render)
     image = win.canvas.item.pixmap().toImage()
     assert 126 <= image.pixelColor(0, 0).red() <= 129
     assert image.pixelColor(0, 0).alpha() == 255
@@ -156,7 +156,7 @@ def test_hdr_exposure_roundtrip(qapp, tmp_path):
     assert win.exposure.isEnabled()
     before = win.canvas.item.pixmap().toImage().pixelColor(0, 0).red()
     win.exposure.setValue(-30)
-    wait_for(qapp, lambda: not win.render_timer.isActive() and not win.cancel_button.isVisible())
+    wait_for(qapp, lambda: not win.render_timer.isActive() and not win._pending_render)
     after = win.canvas.item.pixmap().toImage().pixelColor(0, 0).red()
     assert after < before
     assert win.canvas.item.pixmap().toImage().pixelColor(0, 0).alpha() == 255

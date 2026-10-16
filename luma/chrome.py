@@ -1,7 +1,56 @@
 """Compact native-feeling window chrome using Qt's OS move/resize requests."""
 from __future__ import annotations
-from PySide6.QtCore import QObject, QEvent, Qt
+import ctypes
+from functools import lru_cache
+import sys
+
+from PySide6.QtCore import QObject, QEvent, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QFrame, QWidget
+
+
+class _Margins(ctypes.Structure):
+    # Win32 LONG is always 32-bit, including on 64-bit Windows.
+    _fields_ = [(name, ctypes.c_int32) for name in ('left', 'right', 'top', 'bottom')]
+
+
+@lru_cache(maxsize=1)
+def _dwm_functions():
+    dll = ctypes.WinDLL('dwmapi', use_last_error=True)
+    attribute = dll.DwmSetWindowAttribute
+    attribute.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+    attribute.restype = ctypes.c_int32  # HRESULT; do not truncate HWND to int.
+    extend = dll.DwmExtendFrameIntoClientArea
+    extend.argtypes = [ctypes.c_void_p, ctypes.POINTER(_Margins)]
+    extend.restype = ctypes.c_int32
+    return attribute, extend
+
+
+def apply_native_corners(hwnd, rounded=True):
+    """Request native Win11 corners while leaving unsupported systems untouched.
+
+    The opaque rectangular Qt surface keeps the existing custom titlebar and
+    system move/resize path. A one-physical-pixel DWM frame supplies a native
+    border; no bitmap mask, translucent layer, or replacement caption is used.
+    Maximized/fullscreen windows remove it; DWM handles snapped-window policy.
+    https://learn.microsoft.com/windows/apps/desktop/modernize/ui/apply-rounded-corners
+    https://learn.microsoft.com/windows/win32/dwm/customframe
+    """
+    if sys.platform != 'win32' or not hwnd:
+        return False
+    try:
+        if sys.getwindowsversion().build < 22000:
+            return False
+        attribute, extend = _dwm_functions()
+        preference = ctypes.c_int32(2 if rounded else 1)  # DWMWCP_ROUND / DONOTROUND
+        result = attribute(hwnd, 33, ctypes.byref(preference), ctypes.sizeof(preference))
+        if int(result) & 0x80000000:  # FAILED(HRESULT), including unsigned test doubles.
+            return False
+        margin = 1 if rounded else 0
+        result = extend(hwnd, ctypes.byref(_Margins(margin, margin, margin, margin)))
+        return not bool(int(result) & 0x80000000)
+    except (AttributeError, OSError):
+        # Older Windows, unavailable DWM, or a missing optional entry point.
+        return False
 
 
 def resize_edges(point, width, height, margin=6):
@@ -41,14 +90,34 @@ class WindowChrome(QObject):
         super().__init__(window)
         self.window = window
         self.cursor_widget = None
+        self._closed = False
+        self.native_corners_applied = False
+        self._native_timer = QTimer(self)
+        self._native_timer.setSingleShot(True)
+        self._native_timer.timeout.connect(self._update_native_corners)
         for widget in [window, *window.findChildren(QWidget)]:
             widget.setMouseTracking(True)
         QApplication.instance().installEventFilter(self)
 
     def close(self):
+        self._closed = True
+        self._native_timer.stop()
         QApplication.instance().removeEventFilter(self)
 
+    def _update_native_corners(self):
+        if self._closed or self.window.windowHandle() is None:
+            return
+        self.native_corners_applied = apply_native_corners(
+            int(self.window.winId()),
+            rounded=not (self.window.isMaximized() or self.window.isFullScreen()))
+
     def eventFilter(self, watched, event):
+        if (watched is self.window and sys.platform == 'win32' and not self._closed
+                and event.type() in (QEvent.Type.Show, QEvent.Type.WinIdChange,
+                                     QEvent.Type.WindowStateChange, QEvent.Type.ActivationChange)):
+            # Qt may recreate its HWND during state changes. Wait until the
+            # transition completes, then opt in again using the current handle.
+            self._native_timer.start(0)
         if (not isinstance(watched, QWidget) or watched.window() is not self.window
                 or self.window.isMaximized() or self.window.isFullScreen()
                 or event.type() not in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress)):

@@ -1,4 +1,4 @@
-"""Narrow uninstall boundary for the per-user, versioned Windows installer.
+"""Narrow ownership boundary for the per-user, versioned Windows installer.
 
 This module never launches an older executable or accepts an arbitrary root.
 The shell registrar still performs its own owner comparison and transaction.
@@ -85,3 +85,19 @@ Errors propagate so the uninstaller aborts before deleting application files.
     from .shell_integration import uninstall_if_executable
     for candidate in candidates:
         uninstall_if_executable(candidate)
+
+
+def register_managed_installation(executable: Path) -> None:
+    """Register this payload, permitting upgrades only within its managed root.
+
+    Validate every candidate before entering the registrar. The registrar checks
+    journal ownership while holding its mutex, before recovery or any writes.
+    An unrelated portable registration or a foreign change causes a conflict,
+    never an automatic takeover. Old payloads are retained for loaded DLLs.
+    """
+    # Journal paths are canonical. In particular Windows can supply RUNNER~1
+    # (or another 8.3 ancestor) even though the older registration uses its
+    # expanded long path. Resolve all siblings, not just the current payload.
+    candidates = tuple(path.resolve(strict=True) for path in installed_executables(executable))
+    from .shell_integration import install
+    install(Path(executable).resolve(strict=True), allowed_previous_executables=candidates)

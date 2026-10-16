@@ -1,0 +1,404 @@
+{
+  "platform": "linux",
+  "source_commit": "ada8d4beceedb7ef336401c80c546f5f3e635f08",
+  "cache": "Fresh interpreter for each sample; OS file cache not evicted; fixtures generated before timing",
+  "note": "Linux source-worker timings/RSS, not Windows packaged job-memory evidence",
+  "results": [
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 16,384 \u00d7 8,192. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 256,
+      "generate_s": 0.00044265800033826963,
+      "process_peak_rss_mib": 31.9453125,
+      "input_bytes": 8683572,
+      "process_wall_s": 0.10149042500006544,
+      "sample": 1
+    },
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 16,384 \u00d7 8,192. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 256,
+      "generate_s": 0.0003267330002927338,
+      "process_peak_rss_mib": 30.2109375,
+      "input_bytes": 8683572,
+      "process_wall_s": 0.09053180799992333,
+      "sample": 2
+    },
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 16,384 \u00d7 8,192. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 256,
+      "generate_s": 0.0003251110001656343,
+      "process_peak_rss_mib": 31.20703125,
+      "input_bytes": 8683572,
+      "process_wall_s": 0.0920188820000476,
+      "sample": 3
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 256,
+      "generate_s": 1.8657645580001372,
+      "process_peak_rss_mib": 33.14453125,
+      "input_bytes": 8683572,
+      "process_wall_s": 1.8992961980002292,
+      "sample": 1
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 256,
+      "generate_s": 1.8716159350001362,
+      "process_peak_rss_mib": 34.39453125,
+      "input_bytes": 8683572,
+      "process_wall_s": 1.905489132999719,
+      "sample": 2
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 256,
+      "generate_s": 1.8665008640000451,
+      "process_peak_rss_mib": 34.27734375,
+      "input_bytes": 8683572,
+      "process_wall_s": 1.9004581170001984,
+      "sample": 3
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "19a47cc2aacd0064a9caafa8d9d59a8533ce76bb34901c72970c00ee2b53d49a",
+      "variant": "released",
+      "fixture": "thumbnail-4096x2048.hdr",
+      "edge": 256,
+      "generate_s": 0.753159124999911,
+      "process_peak_rss_mib": 233.6953125,
+      "input_bytes": 598067,
+      "process_wall_s": 0.8487358540000969,
+      "sample": 1
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "19a47cc2aacd0064a9caafa8d9d59a8533ce76bb34901c72970c00ee2b53d49a",
+      "variant": "released",
+      "fixture": "thumbnail-4096x2048.hdr",
+      "edge": 256,
+      "generate_s": 0.7469806190001691,
+      "process_peak_rss_mib": 234.75390625,
+      "input_bytes": 598067,
+      "process_wall_s": 0.8393766379999761,
+      "sample": 2
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "19a47cc2aacd0064a9caafa8d9d59a8533ce76bb34901c72970c00ee2b53d49a",
+      "variant": "released",
+      "fixture": "thumbnail-4096x2048.hdr",
+      "edge": 256,
+      "generate_s": 0.8077623250001125,
+      "process_peak_rss_mib": 235.2265625,
+      "input_bytes": 598067,
+      "process_wall_s": 0.9449649160001172,
+      "sample": 3
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-4096x2048.hdr",
+      "edge": 256,
+      "generate_s": 0.20839652599988767,
+      "process_peak_rss_mib": 34.203125,
+      "input_bytes": 598067,
+      "process_wall_s": 0.24181215199996586,
+      "sample": 1
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-4096x2048.hdr",
+      "edge": 256,
+      "generate_s": 0.22444200700010697,
+      "process_peak_rss_mib": 33.0703125,
+      "input_bytes": 598067,
+      "process_wall_s": 0.2604768960000001,
+      "sample": 2
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-4096x2048.hdr",
+      "edge": 256,
+      "generate_s": 0.22513945900027466,
+      "process_peak_rss_mib": 34.21875,
+      "input_bytes": 598067,
+      "process_wall_s": 0.26462024300008125,
+      "sample": 3
+    },
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 8,192 \u00d7 4,096. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "thumbnail-8192x4096.hdr",
+      "edge": 256,
+      "generate_s": 0.00040339899987884564,
+      "process_peak_rss_mib": 30.75390625,
+      "input_bytes": 2244659,
+      "process_wall_s": 0.09187720500040086,
+      "sample": 1
+    },
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 8,192 \u00d7 4,096. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "thumbnail-8192x4096.hdr",
+      "edge": 256,
+      "generate_s": 0.0004076560003341001,
+      "process_peak_rss_mib": 31.07421875,
+      "input_bytes": 2244659,
+      "process_wall_s": 0.09367508400009683,
+      "sample": 2
+    },
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 8,192 \u00d7 4,096. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "thumbnail-8192x4096.hdr",
+      "edge": 256,
+      "generate_s": 0.00036280800031818217,
+      "process_peak_rss_mib": 30.2578125,
+      "input_bytes": 2244659,
+      "process_wall_s": 0.10066191299983984,
+      "sample": 3
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-8192x4096.hdr",
+      "edge": 256,
+      "generate_s": 0.5765632220000043,
+      "process_peak_rss_mib": 32.99609375,
+      "input_bytes": 2244659,
+      "process_wall_s": 0.613232797999899,
+      "sample": 1
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-8192x4096.hdr",
+      "edge": 256,
+      "generate_s": 0.6042661149999731,
+      "process_peak_rss_mib": 34.15234375,
+      "input_bytes": 2244659,
+      "process_wall_s": 0.6436804789996131,
+      "sample": 2
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        128
+      ],
+      "rgba_sha256": "055f0ae1bf64cc8c126a7af885482a0053a7276a5ca15bafe96e4bd710bac807",
+      "variant": "candidate",
+      "fixture": "thumbnail-8192x4096.hdr",
+      "edge": 256,
+      "generate_s": 0.5729666510001152,
+      "process_peak_rss_mib": 32.8515625,
+      "input_bytes": 2244659,
+      "process_wall_s": 0.6064692559998548,
+      "sample": 3
+    },
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 7,680 \u00d7 4,320. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "gradient-8k-flat.hdr",
+      "edge": 256,
+      "generate_s": 0.0003171180001118046,
+      "process_peak_rss_mib": 31.046875,
+      "input_bytes": 132710451,
+      "process_wall_s": 0.09355051100010314,
+      "sample": 1
+    },
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 7,680 \u00d7 4,320. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "gradient-8k-flat.hdr",
+      "edge": 256,
+      "generate_s": 0.0004639899998437613,
+      "process_peak_rss_mib": 30.3671875,
+      "input_bytes": 132710451,
+      "process_wall_s": 0.1139425379997192,
+      "sample": 2
+    },
+    {
+      "ok": false,
+      "error": "ImageTooLargeError: Image is too large: 7,680 \u00d7 4,320. The safety limit is 16,000,000 pixels and 32,768 pixels per side.",
+      "variant": "released",
+      "fixture": "gradient-8k-flat.hdr",
+      "edge": 256,
+      "generate_s": 0.000280363000001671,
+      "process_peak_rss_mib": 31.11328125,
+      "input_bytes": 132710451,
+      "process_wall_s": 0.12631890900001963,
+      "sample": 3
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        144
+      ],
+      "rgba_sha256": "3533c84a175c7d403ca7eaaf53bfe4463e25a23898cfe65f4f57b290f729e11a",
+      "variant": "candidate",
+      "fixture": "gradient-8k-flat.hdr",
+      "edge": 256,
+      "generate_s": 0.1918193730002713,
+      "process_peak_rss_mib": 33.16796875,
+      "input_bytes": 132710451,
+      "process_wall_s": 0.22283194100009496,
+      "sample": 1
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        144
+      ],
+      "rgba_sha256": "3533c84a175c7d403ca7eaaf53bfe4463e25a23898cfe65f4f57b290f729e11a",
+      "variant": "candidate",
+      "fixture": "gradient-8k-flat.hdr",
+      "edge": 256,
+      "generate_s": 0.17481526900019162,
+      "process_peak_rss_mib": 34.453125,
+      "input_bytes": 132710451,
+      "process_wall_s": 0.20902489099989907,
+      "sample": 2
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        256,
+        144
+      ],
+      "rgba_sha256": "3533c84a175c7d403ca7eaaf53bfe4463e25a23898cfe65f4f57b290f729e11a",
+      "variant": "candidate",
+      "fixture": "gradient-8k-flat.hdr",
+      "edge": 256,
+      "generate_s": 0.18483438300017951,
+      "process_peak_rss_mib": 34.33984375,
+      "input_bytes": 132710451,
+      "process_wall_s": 0.2165163310000935,
+      "sample": 3
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        1024,
+        512
+      ],
+      "rgba_sha256": "76b0382804b792a0fa524bde3b0050960e2fb668c714d35473a6f4053d37c90e",
+      "variant": "candidate",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 1024,
+      "generate_s": 2.0069735419997414,
+      "process_peak_rss_mib": 46.02734375,
+      "input_bytes": 8683572,
+      "process_wall_s": 2.0496402290000333,
+      "sample": 1
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        1024,
+        512
+      ],
+      "rgba_sha256": "76b0382804b792a0fa524bde3b0050960e2fb668c714d35473a6f4053d37c90e",
+      "variant": "candidate",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 1024,
+      "generate_s": 1.9233509900000172,
+      "process_peak_rss_mib": 45.9296875,
+      "input_bytes": 8683572,
+      "process_wall_s": 1.9570826750000379,
+      "sample": 2
+    },
+    {
+      "ok": true,
+      "dimensions": [
+        1024,
+        512
+      ],
+      "rgba_sha256": "76b0382804b792a0fa524bde3b0050960e2fb668c714d35473a6f4053d37c90e",
+      "variant": "candidate",
+      "fixture": "thumbnail-16384x8192.hdr",
+      "edge": 1024,
+      "generate_s": 1.912131059999865,
+      "process_peak_rss_mib": 47.171875,
+      "input_bytes": 8683572,
+      "process_wall_s": 1.9482445999997253,
+      "sample": 3
+    }
+  ]
+}

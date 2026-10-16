@@ -35,8 +35,10 @@ def test_custom_titlebar_rotation_and_window_states(qapp):
     image = QImage(12, 8, QImage.Format.Format_RGBA8888)
     image.fill(Qt.GlobalColor.red)
     win.canvas.set_image(image)
+    fit_scale = win.canvas.transform().m11()
     win.zoom_combo.menu().actions()[3].trigger()
-    assert abs(win.canvas.transform().m11() * win.canvas.viewport().devicePixelRatioF() - 2) < .001
+    assert abs(win.canvas.transform().m11() / fit_scale - 2) < .001
+    assert win.canvas.zoom_percent == 200
     win.canvas.rotate_clockwise()
     assert win.canvas.displayed_image().size().width() == 8
     assert win.canvas.displayed_image().size().height() == 12

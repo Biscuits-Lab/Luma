@@ -71,6 +71,18 @@ class InstallerBoundaryTests(unittest.TestCase):
         self.assertIn("#error Inno Setup 6.3 or newer is required", script)
         self.assertNotIn(".VersionInfo.FileVersion", build)
 
+    def test_registration_is_automatic_checked_and_has_no_thumbnail_task(self):
+        script = (MODULE.parents[1] / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
+        self.assertIn("if CurStep <> ssPostInstall then Exit;", script)
+        self.assertIn("'--shell-register-current-user'", script)
+        self.assertIn("ShellRegistrationComplete := ResultCode = 0;", script)
+        self.assertIn("if ShellRegistrationComplete then Result := 0 else Result := 10;", script)
+        self.assertIn("Check: ShellRegistrationSucceeded", script)
+        tasks = script.split("[Tasks]", 1)[1].split("[Files]", 1)[0]
+        self.assertNotIn("thumbnail", tasks.lower())
+        self.assertNotIn("shell", tasks.lower())
+        self.assertIn("PrivilegesRequired=lowest", script)
+
     def test_only_same_installation_marker_bearing_payloads(self):
         first = self.payload(self.root / "installed")
         second = self.payload(self.root / "installed", "b" * 64)
@@ -122,6 +134,43 @@ class InstallerBoundaryTests(unittest.TestCase):
         with patch.object(installer, "__package__", "luma"), patch.dict("sys.modules", {"luma.shell_integration": fake}):
             installer.uninstall_managed_installation(second)
         self.assertEqual(set(called), {first, second})
+
+    def test_automatic_registration_allows_only_validated_sibling_owners(self):
+        first = self.payload(self.root / "installed")
+        second = self.payload(self.root / "installed", "b" * 64)
+        foreign = self.payload(self.root / "portable")
+        called = []
+        def register(exe, *, allowed_previous_executables):
+            called.append((exe, allowed_previous_executables))
+        fake = types.SimpleNamespace(install=register)
+        with patch.object(installer, "__package__", "luma"), patch.dict("sys.modules", {"luma.shell_integration": fake}):
+            installer.register_managed_installation(second)
+        self.assertEqual(len(called), 1)
+        self.assertEqual(called[0][0], second.resolve(strict=True))
+        self.assertEqual(set(called[0][1]), {first.resolve(strict=True), second.resolve(strict=True)})
+        self.assertNotIn(foreign.resolve(strict=True), called[0][1])
+
+    def test_invalid_marker_blocks_automatic_registration(self):
+        exe = self.payload(self.root)
+        (exe.parent / installer.MARKER_NAME).unlink()
+        called = []
+        fake = types.SimpleNamespace(install=lambda *args, **kwargs: called.append(args))
+        with patch.object(installer, "__package__", "luma"), patch.dict("sys.modules", {"luma.shell_integration": fake}):
+            with self.assertRaises(installer.InstallerError):
+                installer.register_managed_installation(exe)
+        self.assertEqual(called, [])
+
+    def test_registration_conflict_preserves_all_payloads(self):
+        first = self.payload(self.root)
+        second = self.payload(self.root, "b" * 64)
+        def conflict(*args, **kwargs):
+            raise RuntimeError("Unrelated registration was preserved")
+        fake = types.SimpleNamespace(install=conflict)
+        with patch.object(installer, "__package__", "luma"), patch.dict("sys.modules", {"luma.shell_integration": fake}):
+            with self.assertRaises(RuntimeError):
+                installer.register_managed_installation(second)
+        self.assertTrue(first.is_file())
+        self.assertTrue(second.is_file())
 
     def test_invalid_marker_prevents_any_registrar_call(self):
         exe = self.payload(self.root)

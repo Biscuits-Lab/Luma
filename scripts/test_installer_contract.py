@@ -11,6 +11,9 @@ MODULE = Path(__file__).resolve().parents[1] / "luma" / "installer.py"
 spec = importlib.util.spec_from_file_location("luma.installer_contract", MODULE)
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
+smoke_spec = importlib.util.spec_from_file_location("smoke_installer_contract", MODULE.parents[1] / "scripts/smoke_installer.py")
+smoke = importlib.util.module_from_spec(smoke_spec)
+smoke_spec.loader.exec_module(smoke)
 
 
 class InstallerBoundaryTests(unittest.TestCase):
@@ -30,6 +33,26 @@ class InstallerBoundaryTests(unittest.TestCase):
             "payload_id": payload_id, "bundle_sha256": digest,
         }), encoding="utf-8")
         return exe
+
+    def test_arp_uninstaller_allows_incremented_filename(self):
+        for name in ("unins000.exe", "unins001.exe"):
+            exe = self.root / name
+            exe.write_bytes(b"test-only")
+            self.assertEqual(smoke.registered_uninstaller(f'"{exe}"', self.root), exe)
+
+    def test_arp_uninstaller_refuses_other_paths_or_arguments(self):
+        root = self.root / "installed"
+        root.mkdir()
+        foreign = self.root / "unins001.exe"
+        foreign.write_bytes(b"test-only")
+        with self.assertRaises(ValueError):
+            smoke.registered_uninstaller(f'"{foreign}"', root)
+        exe = root / "Luma.exe"
+        exe.write_bytes(b"test-only")
+        with self.assertRaises(ValueError):
+            smoke.registered_uninstaller(f'"{exe}"', root)
+        with self.assertRaises(ValueError):
+            smoke.registered_uninstaller(f'"{exe}" /arbitrary', root)
 
     def test_compiler_minimum_uses_inno_engine_version(self):
         root = MODULE.parents[1]

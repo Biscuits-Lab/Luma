@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,23 @@ sys.path.insert(0, str(ROOT))
 ARP = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{7F17F980-8965-4C81-8470-4880AD6B989F}_is1"
 JOURNAL = r"Software\Biscuits Lab\Luma\ShellIntegration"
 SETTINGS = r"Software\Biscuits Lab\Luma"
+
+
+def registered_uninstaller(command: str, install_root: Path) -> Path:
+    """Resolve only the installer-owned executable named by its ARP entry.
+
+    Inno may allocate unins001.exe on an immediate reinstall while the previous
+    unins000.exe is completing its asynchronous self-removal.
+    """
+    match = re.fullmatch(r'"([^"\r\n]+)"|([^"\r\n]+)', command)
+    if match is None:
+        raise ValueError("Unexpected uninstall command")
+    executable = Path(match.group(1) or match.group(2)).resolve(strict=True)
+    if (executable.parent != install_root.resolve(strict=True)
+            or not re.fullmatch(r"unins[0-9]{3}\.exe", executable.name, re.IGNORECASE)
+            or not executable.is_file()):
+        raise ValueError("Uninstaller is outside the test-owned installation")
+    return executable
 
 
 def main() -> int:
@@ -77,7 +95,10 @@ def main() -> int:
              f"/DIR={install_root}", "/TASKS=", f"/LOG={logs / (name + '.log')}"], name, expected)
 
     def uninstall(name, expected=0):
-        run([install_root / "unins000.exe", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+        value = read_value(winreg.HKEY_CURRENT_USER, ARP, "UninstallString")
+        assert value is not None and value[1] == winreg.REG_SZ, "Missing installer ARP command"
+        executable = registered_uninstaller(value[0], install_root)
+        run([executable, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
              f"/LOG={logs / (name + '.log')}"], name, expected)
 
     def payloads():

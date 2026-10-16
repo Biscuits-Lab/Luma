@@ -292,9 +292,24 @@ def main() -> int:
             time.sleep(0.1)
         raise TimeoutError("No visible owned GUI from the expected executable")
 
+    def capture_owned(window: int, destination: Path) -> None:
+        # A newly visible native Qt HWND can precede its first painted frame.
+        # Retry only that observed blank-frame condition; other errors and a
+        # persistently blank image remain failures, never synthetic evidence.
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                api.screenshot(window, destination)
+                return
+            except AssertionError as error:
+                if str(error) != "PrintWindow returned a blank image" or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.25)
+
     def inspect_version(executable: Path, expected: str, label: str) -> dict:
         window, pid = wait_window(executable)
-        api.screenshot(window, output / f"{label}-before-settings.png")
+        wait_ui(pid, executable, lambda state: action_ready(state, "more"), label + "-main-ready")
+        capture_owned(window, output / f"{label}-before-settings.png")
         invoke(pid, executable, "more")
         wait_ui(pid, executable, lambda s: bool(visible_names(s) & {"Settings and updates…", "Settings", "设置", "設定"}), label + "-menu")
         invoke(pid, executable, "settings")
@@ -305,7 +320,7 @@ def main() -> int:
             raise AssertionError("No actual loaded Python runtime evidence")
         if any(not path.is_relative_to(executable.parent.resolve(strict=True)) for path in modules):
             raise AssertionError("Frozen GUI reused runtime modules from a different payload")
-        api.screenshot(window, output / f"{label}-main.png")
+        capture_owned(window, output / f"{label}-main.png")
         return {"pid": pid, "executable": str(process_path(pid)), "embedded_ui_version": expected,
                 "modules": [str(path) for path in modules], "snapshot": str(output / f"{label}-settings.json")}
 

@@ -68,6 +68,16 @@ class LegacyUpdateContracts(unittest.TestCase):
         self.assertLess(invocation.index("wait_ui("), invocation.index('"invoke", target'))
         self.assertEqual(invocation.count('"invoke", target'), 1)
 
+    def test_native_capture_waits_for_real_ui_and_only_retries_blank_frame(self):
+        source = (ROOT / "scripts/smoke_update_legacy.py").read_text()
+        probe = source.split("    def inspect_version(", 1)[1].split("    def close_owned_job", 1)[0]
+        self.assertLess(probe.index('label + "-main-ready"'), probe.index("capture_owned("))
+        capture = source.split("    def capture_owned(", 1)[1].split("    def inspect_version", 1)[0]
+        self.assertIn("time.monotonic() + 10", capture)
+        self.assertIn('str(error) != "PrintWindow returned a blank image"', capture)
+        self.assertIn("api.screenshot(window, destination)", capture)
+        self.assertIn("raise", capture)
+
 
 if __name__ == "__main__":
     unittest.main()

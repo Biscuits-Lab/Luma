@@ -37,3 +37,16 @@ def test_scaled_ui_gate_explicitly_uses_native_windows_plugin():
     assert '$env:QT_QPA_PLATFORM = "windows"' in block
     assert '$env:QT_SCALE_FACTOR = "2"' in block
     assert 'if ($LASTEXITCODE -ne 0) { throw' in block
+
+
+def test_native_installer_preflight_runs_before_expensive_build_and_cannot_be_ignored():
+    source = WORKFLOW.read_text(encoding='utf-8')
+    blocks = source.split('      - ')
+    preflight = next(block for block in blocks if block.startswith(
+        'name: Preflight native installer compilation without setup output\n'))
+    build = next(block for block in blocks if block.startswith(
+        'name: Build native bridge, test viewer, create folder bundle\n'))
+    assert blocks.index(preflight) < blocks.index(build)
+    assert 'run: python scripts/preflight_installer.py' in preflight
+    assert 'continue-on-error' not in preflight
+    assert 'build/installer-preflight/**' in source

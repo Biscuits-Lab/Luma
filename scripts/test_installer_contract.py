@@ -16,6 +16,9 @@ spec.loader.exec_module(installer)
 smoke_spec = importlib.util.spec_from_file_location("smoke_installer_contract", MODULE.parents[1] / "scripts/smoke_installer.py")
 smoke = importlib.util.module_from_spec(smoke_spec)
 smoke_spec.loader.exec_module(smoke)
+preflight_spec = importlib.util.spec_from_file_location("preflight_installer_contract", MODULE.parents[1] / "scripts/preflight_installer.py")
+preflight = importlib.util.module_from_spec(preflight_spec)
+preflight_spec.loader.exec_module(preflight)
 
 
 def message_section(path, section):
@@ -131,6 +134,16 @@ class InstallerLanguageTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIsNone(re.search(r"(?m)^\s*\[", source))
 
+    def test_pascal_code_uses_pascal_comments(self):
+        # Semicolon comments are Inno section syntax, not Pascal comments.
+        # A code include is inserted literally into the surrounding [Code].
+        for name in ("Luma.iss", "LumaUI.iss"):
+            source = (self.root / "packaging/windows" / name).read_text(encoding="utf-8")
+            if name == "Luma.iss":
+                source = source.split("[Code]", 1)[1]
+            with self.subTest(name=name):
+                self.assertIsNone(re.search(r"(?m)^\s*;", source))
+
     def test_compact_task_choice_preserves_native_silent_and_previous_defaults(self):
         ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
         self.assertIn("LumaDesktopTouched and not WizardSilent", ui)
@@ -151,6 +164,44 @@ class InstallerLanguageTests(unittest.TestCase):
         self.assertIn("$UiFontScaleTest -and !$Artifacts.StartsWith($UiTestRoot", build)
         self.assertIn("windows-x64-ui-font-test", script)
         self.assertIn("never release artifacts", build)
+
+
+class InstallerCompilePreflightTests(unittest.TestCase):
+    def test_actual_script_is_compiled_with_output_disabled_for_both_variants(self):
+        root, work = Path("repo"), Path("repo/build/temporary")
+        for scaled in (False, True):
+            command = preflight.compile_command(Path("ISCC.exe"), root, work, "0.1.3", scaled)
+            self.assertEqual(command[1], "/O-")
+            self.assertEqual(command[-1], str(root / "packaging/windows/Luma.iss"))
+            self.assertIn(f"/DArtifactDir={work / 'output'}", command)
+            self.assertEqual("/DLumaUiFontScaleTest=1" in command, scaled)
+            self.assertNotIn("artifacts", " ".join(command))
+
+    def test_success_never_runs_dummy_payload_and_removes_temporary_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "pyproject.toml").write_text('[project]\nversion = "0.1.3"\n')
+            with patch.object(preflight.subprocess, "run", return_value=types.SimpleNamespace(
+                    returncode=0, stdout="checked", stderr="")) as run:
+                report = preflight.preflight(root, Path("ISCC.exe"))
+            self.assertTrue(report["passed"])
+            self.assertEqual(run.call_count, 2)
+            for call in run.call_args_list:
+                self.assertEqual(call.args[0][0], "ISCC.exe")
+                self.assertEqual(call.kwargs["timeout"], 90)
+            self.assertEqual(sorted(x.name for x in (root / "build/installer-preflight").iterdir()),
+                             ["font-stress.log", "normal.log", "report.json"])
+
+    def test_compile_failure_stops_and_records_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "pyproject.toml").write_text('[project]\nversion = "0.1.3"\n')
+            with patch.object(preflight.subprocess, "run", return_value=types.SimpleNamespace(
+                    returncode=2, stdout="compile error", stderr="")) as run:
+                report = preflight.preflight(root, Path("ISCC.exe"))
+            self.assertFalse(report["passed"])
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(report["cases"][0]["returncode"], 2)
 
 
 class InstallerBoundaryTests(unittest.TestCase):

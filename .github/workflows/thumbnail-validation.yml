@@ -28,6 +28,9 @@ jobs:
         with:
           python-version: "3.12"
           architecture: x64
+      - name: Preflight native installer compilation without setup output
+        shell: pwsh
+        run: python scripts/preflight_installer.py
       - name: Build native bridge, test viewer, create folder bundle
         shell: pwsh
         run: ./scripts/build_windows.ps1
@@ -124,6 +127,7 @@ jobs:
             build/*report*.json
             build/installer-smoke/**
             build/installer-ui/**
+            build/installer-preflight/**
             build/ui-evidence/**
             build/thumbnail-artifacts/**
             build/thumbnail/Testing/Temporary/*

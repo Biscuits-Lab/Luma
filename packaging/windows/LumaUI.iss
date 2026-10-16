@@ -1,4 +1,4 @@
-; Native Inno controls only. Keep the engine's validation, handlers and modal flow.
+{ Native Inno controls only. Keep the engine's validation, handlers and modal flow. }
 var
   LumaLayoutActive: Boolean;
   LumaFooter: TPanel;

@@ -283,6 +283,16 @@ manifest.write_text(json.dumps({
     # Do not create DisableProcessIsolation, AppID overrides, or global mappings.
     Notify-Associations
 
+    # A built-in PNG association distinguishes OS cache/surrogate availability
+    # from a problem in our disposable extension/CLSID registration.
+    try {
+        Invoke-Captured "builtin-png-surrogate" $Harness `
+            @("--surrogate", [string]$manifest.cases[0].path) $TimeoutSeconds
+    }
+    catch {
+        $failures.Add("builtin-png-surrogate: $($_.Exception.Message)")
+    }
+
     $index = 0
     foreach ($case in $manifest.cases) {
         $index++

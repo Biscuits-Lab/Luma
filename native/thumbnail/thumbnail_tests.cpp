@@ -13,6 +13,8 @@
 #include <string>
 #include <thread>
 
+#include "thumbnail_test_token.h"
+
 namespace {
 
 using GetClassObject =
@@ -398,11 +400,13 @@ void TestFixtureProtocol(GetClassObject get) {
         std::cout << "fixture_rejected " << test.name << '\n';
     }
 
-    for (const bool maximum : {false, true}) {
+    for (const char* scenario : {"valid", "valid-max", "read-only-pin"}) {
+        const std::string protocol = std::string(scenario) + "\n";
+        const bool maximum = protocol == "valid-max\n";
         OwnedBitmap bitmap;
         WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
         const HRESULT hr = RequestFixture(
-            get, maximum ? "valid-max\n" : "valid\n",
+            get, protocol,
             maximum ? 0xffffffffu : 1u, &bitmap.value, &alpha);
         Require(hr == S_OK && bitmap.value && alpha == WTSAT_ARGB,
                 "Valid fixture was rejected");
@@ -422,7 +426,7 @@ void TestFixtureProtocol(GetClassObject get) {
                         pixel[2] == 255 && pixel[3] == 128,
                     "Fixture straight-alpha channel conversion failed");
         }
-        std::cout << "fixture_valid size=" << expected
+        std::cout << "fixture_valid scenario=" << scenario << " size=" << expected
                   << " BGRA=0,0,255,128\n";
     }
 }
@@ -517,7 +521,38 @@ void TestFixtureTimeout(GetClassObject get) {
               << " elapsed_ms=" << elapsed << " exit_code=" << exitCode << '\n';
 }
 
+void PrintRegistrationDiagnostics(const wchar_t* inputPath) {
+    const wchar_t* extension = PathFindExtensionW(inputPath);
+    constexpr wchar_t handler[] = L"{E357FCCD-A995-4576-B01F-234630154E96}";
+    wchar_t provider[64]{};
+    DWORD count = ARRAYSIZE(provider);
+    const HRESULT hr = AssocQueryStringW(
+        ASSOCF_NONE, ASSOCSTR_SHELLEXTENSION, extension, handler, provider, &count);
+    std::wcerr << L"association extension=" << extension
+               << L" HRESULT=0x" << std::hex << static_cast<unsigned long>(hr)
+               << std::dec << L" provider=" << (SUCCEEDED(hr) ? provider : L"")
+               << L"\n";
+    CLSID id{};
+    if (FAILED(hr) || FAILED(CLSIDFromString(provider, &id))) return;
+
+    const std::wstring clsid = L"CLSID\\" + std::wstring(provider) +
+        L"\\InprocServer32";
+    for (const bool merged : {false, true}) {
+        const std::wstring key = merged ? clsid : L"Software\\Classes\\" + clsid;
+        wchar_t value[32768]{};
+        DWORD bytes = sizeof(value);
+        const LSTATUS status = RegGetValueW(
+            merged ? HKEY_CLASSES_ROOT : HKEY_CURRENT_USER, key.c_str(),
+            nullptr, RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, nullptr,
+            value, &bytes);
+        std::wcerr << (merged ? L"HKCR64 " : L"HKCU64 ") << key
+                   << L" status=" << status << L" dll="
+                   << (status == ERROR_SUCCESS ? value : L"") << L"\n";
+    }
+}
+
 void TestSurrogate(const wchar_t* inputPath) {
+    PrintRegistrationDiagnostics(inputPath);
     ComPtr<IShellItem> item;
     Require(SUCCEEDED(SHCreateItemFromParsingName(
                 inputPath, nullptr, IID_IShellItem,
@@ -525,10 +560,14 @@ void TestSurrogate(const wchar_t* inputPath) {
             "Cannot create shell item");
 
     ComPtr<IThumbnailCache> cache;
-    Require(SUCCEEDED(CoCreateInstance(
-                CLSID_LocalThumbnailCache, nullptr, CLSCTX_INPROC_SERVER,
-                IID_IThumbnailCache, reinterpret_cast<void**>(&cache.p))),
-            "Cannot create local thumbnail cache");
+    const HRESULT cacheHr = CoCreateInstance(
+        CLSID_LocalThumbnailCache, nullptr, CLSCTX_INPROC_SERVER,
+        IID_IThumbnailCache, reinterpret_cast<void**>(&cache.p));
+    if (FAILED(cacheHr)) {
+        std::cerr << "thumbnail cache activation HRESULT=0x" << std::hex
+                  << static_cast<unsigned long>(cacheHr) << std::dec << '\n';
+        throw std::runtime_error("Cannot create local thumbnail cache");
+    }
 
     ComPtr<ISharedBitmap> shared;
     WTS_CACHEFLAGS cacheFlags = WTS_DEFAULT;
@@ -584,8 +623,10 @@ std::wstring LoadedModulePath(HMODULE module) {
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    const bool surrogate = argc == 3 &&
-        std::wcscmp(argv[1], L"--surrogate") == 0;
+    const bool surrogateChild = argc == 3 &&
+        std::wcscmp(argv[1], L"--surrogate-child") == 0;
+    const bool surrogate = surrogateChild || (argc == 3 &&
+        std::wcscmp(argv[1], L"--surrogate") == 0);
     const bool fixtureProtocol = argc == 3 &&
         std::wcscmp(argv[2], L"--fixture-protocol") == 0;
     const bool fixtureTimeout = argc == 3 &&
@@ -604,6 +645,10 @@ int wmain(int argc, wchar_t** argv) {
         return 2;
     }
 
+    if (surrogate) {
+        const int prepared = PrepareSurrogateClient(argv[2], surrogateChild);
+        if (prepared >= 0) return prepared;
+    }
     const HRESULT comResult =
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(comResult)) return 2;

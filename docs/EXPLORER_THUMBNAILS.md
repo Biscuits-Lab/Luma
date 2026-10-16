@@ -1,8 +1,11 @@
-# Explorer thumbnails: design and validation plan (draft)
+# Explorer thumbnails: architecture and validation
 
-This feature is not in the published v0.1.0 bundle. These drafts have not been
-compiled or run. Do not distribute an Explorer extension until the Windows
-checks below pass.
+This feature is not in the published v0.1.0 bundle. It is under validation on
+`feature/explorer-thumbnails`. MSVC compilation, native contract/protocol/timeout
+tests, Python tests and packaged viewer smoke tests have passed on Windows.
+Actual required-surrogate extraction and installer lifecycle checks must also
+pass before distributing this candidate. CI API coverage does not replace the
+manual Explorer checks listed below.
 
 ## Activation and ownership
 

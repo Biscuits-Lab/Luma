@@ -30,7 +30,7 @@ set_property(TARGET LumaThumbnail PROPERTY
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(thumbnail_tests thumbnail_tests.cpp)
+    add_executable(thumbnail_tests thumbnail_tests.cpp thumbnail_test_token.cpp)
     target_compile_features(thumbnail_tests PRIVATE cxx_std_17)
     target_compile_definitions(thumbnail_tests PRIVATE
         UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
@@ -43,7 +43,7 @@ if(BUILD_TESTING)
         /DYNAMICBASE /NXCOMPAT /guard:cf
     )
     target_link_libraries(thumbnail_tests PRIVATE
-        ole32 uuid gdi32 shlwapi shell32
+        ole32 uuid gdi32 shlwapi shell32 advapi32
     )
     set_property(TARGET thumbnail_tests PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"

@@ -70,6 +70,7 @@ jobs:
           path: |
             build/*report*.json
             build/installer-smoke/**
+            build/thumbnail-artifacts/**
             build/thumbnail/Testing/Temporary/*
             build/Luma/warn-Luma.txt
             dist/Luma/bundle-inventory.txt

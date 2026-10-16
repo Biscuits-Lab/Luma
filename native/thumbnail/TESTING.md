@@ -21,6 +21,10 @@ truncated/extra/oversized output, and a nonzero exit code. Valid fixtures check
 exact straight-alpha bytes and the 1024-pixel clamp. The timeout fixture signals
 its PID to a watcher before sleeping; the harness pins a process handle and
 asserts the helper is terminated after the provider's ten-second timeout.
+A read-only-pin fixture opens the input with LibRaw's READ/share-READ mode.
+Before and after that open, WRITE and DELETE probe opens must fail specifically
+with sharing violations, verifying the provider's retained pin.
+
 These synthetic tests do not replace real decoder or surrogate smoke checks.
 
 After the one-directory application has been built, LumaThumbnail.dll must be
@@ -56,6 +60,23 @@ WTS_REQUIRESURROGATE. It does not load the provider DLL directly, does not accep
 an icon fallback, and fails if Windows cannot provide a surrogate. The harness
 reports bitmap dimensions/format and the calling host PID. That PID is not
 presented as the surrogate or helper PID.
+
+Surrogate tests log the process token's user SID, integrity, elevation,
+Administrators membership, restrictions, session, and read-only EnableLUA
+policy, plus association and HKCU/HKCR registration lookup results. An ordinary
+medium, unelevated client runs directly. An elevated CI client creates a
+same-user LUA restricted token, lowers its integrity to medium, and verifies
+that it is unelevated and has no enabled Administrators group before spawning
+only the test client. The child rechecks its token before any COM initialization.
+If token reduction or process creation fails, the smoke fails visibly.
+No system policy, account, profile, or machine registration is changed.
+
+The test client is created suspended with only its redirected standard handles
+inherited, enters a kill-on-close job before resuming, and has a 44-second wait
+plus at most one second of cleanup. The outer script also bounds all invocations.
+The launcher never elevates, requests breakaway, takes another process's token,
+or substitutes an in-process thumbnail fallback. A built-in PNG surrogate
+baseline helps separate OS hosting failures from temporary provider registration.
 
 The direct path reports the exact provider HRESULT, including helper launch or
 job assignment failure. Windows can wrap a surrogate-side provider failure as

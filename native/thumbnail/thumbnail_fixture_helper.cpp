@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <initializer_list>
 #include <string>
 #include <utility>
 
@@ -161,7 +162,7 @@ int ReadProtocol(HANDLE input, Protocol& protocol) {
     }
 
     static constexpr const char* scenarios[] = {
-        "valid", "valid-max", "bad-magic", "zero-width",
+        "valid", "valid-max", "read-only-pin", "bad-magic", "zero-width",
         "oversized-dimension", "truncated-header", "truncated-pixels",
         "extra-data", "oversized-output", "exit-nonzero", "sleep"
     };
@@ -261,6 +262,26 @@ int SleepScenario(const Protocol& protocol) {
     }
 }
 
+int RequireInputMutationDenied(const wchar_t* path) {
+    constexpr DWORD sharing =
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    for (const DWORD access : {GENERIC_WRITE, DELETE}) {
+        const HANDLE opened = CreateFileW(
+            path, access, sharing, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        const DWORD error = opened == INVALID_HANDLE_VALUE
+                                ? GetLastError() : ERROR_SUCCESS;
+        Handle probe(opened);
+        if (probe.valid() || error != ERROR_SHARING_VIOLATION) {
+            std::fwprintf(stderr,
+                L"Luma fixture: input %ls probe expected sharing violation; got %lu\n",
+                access == GENERIC_WRITE ? L"WRITE" : L"DELETE", error);
+            return 2;
+        }
+    }
+    return 0;
+}
+
 int Run(int argc, wchar_t* argv[]) {
     if (argc != 6 || std::wcscmp(argv[1], L"--thumbnail-worker") != 0 ||
         !IsWorkerKind(argv[2])) {
@@ -274,19 +295,32 @@ int Run(int argc, wchar_t* argv[]) {
     }
 
     constexpr DWORD sharing = FILE_SHARE_READ | FILE_SHARE_WRITE;
-    Handle input(CreateFileW(argv[3], GENERIC_READ, sharing, nullptr,
-                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-    if (!input.valid()) {
-        return WinFail(L"CreateFileW(input)");
-    }
-    if (GetFileType(input.get()) != FILE_TYPE_DISK) {
-        return Fail(L"input must be a disk file");
-    }
-
     Protocol protocol;
-    const int protocolResult = ReadProtocol(input.get(), protocol);
-    if (protocolResult != 0) {
-        return protocolResult;
+    {
+        Handle input(CreateFileW(
+            argv[3], GENERIC_READ, sharing, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, nullptr));
+        if (!input.valid()) return WinFail(L"CreateFileW(input)");
+        if (GetFileType(input.get()) != FILE_TYPE_DISK)
+            return Fail(L"input must be a disk file");
+        const int protocolResult = ReadProtocol(input.get(), protocol);
+        if (protocolResult != 0) return protocolResult;
+    }
+    const std::string& scenario = protocol.lines[0];
+    const bool checkReadOnlyPin = scenario == "read-only-pin";
+    if (checkReadOnlyPin) {
+        // No helper input handle exists: verify the production pin alone.
+        const int result = RequireInputMutationDenied(argv[3]);
+        if (result != 0) return result;
+    }
+    Handle readOnlyInput(checkReadOnlyPin
+        ? CreateFileW(argv[3], GENERIC_READ, FILE_SHARE_READ, nullptr,
+                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)
+        : INVALID_HANDLE_VALUE);
+    if (checkReadOnlyPin) {
+        if (!readOnlyInput.valid()) return WinFail(L"CreateFileW(LibRaw-style input)");
+        const int result = RequireInputMutationDenied(argv[3]);
+        if (result != 0) return result;
     }
 
     Handle output(CreateFileW(argv[4], GENERIC_WRITE, sharing, nullptr,
@@ -298,7 +332,6 @@ int Run(int argc, wchar_t* argv[]) {
         return Fail(L"output must be a disk file");
     }
 
-    const std::string& scenario = protocol.lines[0];
     if (scenario == "exit-nonzero") {
         return 17;
     }

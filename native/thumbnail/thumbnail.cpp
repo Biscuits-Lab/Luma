@@ -276,6 +276,28 @@ struct TempFiles {
         if (madeDirectory) RemoveDirectoryW(directory.c_str());
     }
 
+    void makeInputReadOnly(ULONGLONG deadline) {
+        CheckDeadline(deadline);
+        if (!FlushFileBuffers(inputHandle.get())) FailLastError();
+
+        // LibRaw opens READ/share-READ. A retained writer would conflict.
+        // Keep a no-delete read handle throughout the transition, so there is
+        // never a pathname-replacement window. The final pin also denies writes.
+        Handle transition(CreateFileW(
+            input.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+        if (!transition) FailLastError();
+        CheckDiskObject(transition.get(), false);
+        inputHandle.reset();
+        Handle readOnly(CreateFileW(
+            input.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+        if (!readOnly) FailLastError();
+        CheckDiskObject(readOnly.get(), false);
+        inputHandle = std::move(readOnly);
+        CheckDeadline(deadline);
+    }
+
     void create(const Mode& mode) {
         PWSTR knownFolder = nullptr;
         CheckHr(SHGetKnownFolderPath(
@@ -639,6 +661,7 @@ public:
             TempFiles files;
             files.create(mode_);
             CopyStream(stream_, files.inputHandle.get(), deadline);
+            files.makeInputReadOnly(deadline);
             RunHelper(mode_, files, size, deadline);
 
             *bitmap = ReadBitmap(files.outputHandle.get(), size, deadline);

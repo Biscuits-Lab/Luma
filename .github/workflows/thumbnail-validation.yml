@@ -1,8 +1,6 @@
 name: Windows viewer, update and installer validation
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

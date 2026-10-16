@@ -1,12 +1,6 @@
 name: Historical 0.1.2 updater reproduction
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/legacy-update-repro.yml
-      - scripts/smoke_update_legacy.py
-      - scripts/test_update_legacy_contract.py
   workflow_dispatch:
 
 permissions:

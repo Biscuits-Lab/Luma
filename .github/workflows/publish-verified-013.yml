@@ -1,11 +1,5 @@
 name: Publish verified Luma 0.1.3
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/publish-verified-013.yml
-      - scripts/publish_verified_013.py
-      - scripts/test_publish_verified_013.py
   workflow_dispatch:
 permissions:
   contents: read

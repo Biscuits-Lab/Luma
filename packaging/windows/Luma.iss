@@ -1,5 +1,9 @@
 ; Compile through scripts/build_installer.ps1 using Inno Setup 6.3+.
 ; Payload paths are immutable: never replace a DLL already mapped by Explorer.
+; Check the compiler engine, not ISCC.exe's often-zero file version resource.
+#if Ver < EncodeVer(6, 3, 0)
+  #error Inno Setup 6.3 or newer is required
+#endif
 #ifndef AppVersion
   #error AppVersion is required
 #endif

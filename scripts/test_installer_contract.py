@@ -31,6 +31,14 @@ class InstallerBoundaryTests(unittest.TestCase):
         }), encoding="utf-8")
         return exe
 
+    def test_compiler_minimum_uses_inno_engine_version(self):
+        root = MODULE.parents[1]
+        script = (root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
+        build = (root / "scripts/build_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("#if Ver < EncodeVer(6, 3, 0)", script)
+        self.assertIn("#error Inno Setup 6.3 or newer is required", script)
+        self.assertNotIn(".VersionInfo.FileVersion", build)
+
     def test_only_same_installation_marker_bearing_payloads(self):
         first = self.payload(self.root / "installed")
         second = self.payload(self.root / "installed", "b" * 64)

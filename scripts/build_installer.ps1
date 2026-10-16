@@ -37,10 +37,8 @@ try {
     if (!(Test-Path -LiteralPath $IsccPath -PathType Leaf)) {
         throw "Install Inno Setup 6.3+ from https://jrsoftware.org/isdl.php, then pass -IsccPath if needed. GitHub Windows runners normally include it."
     }
-    $CompilerVersion = (Get-Item -LiteralPath $IsccPath).VersionInfo.FileVersion
-    if ([version]($CompilerVersion -replace '[^0-9.].*$','') -lt [version]'6.3.0') {
-        throw "Inno Setup 6.3+ is required; found $CompilerVersion."
-    }
+    # Luma.iss checks ISPP Ver against EncodeVer(6, 3, 0). ISCC.exe can report
+    # FileVersion 0.0.0.0 even when the actual compiler engine is current.
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
     $Artifacts = (Resolve-Path -LiteralPath $OutputDir).Path
     $Entries = @(Get-ChildItem -LiteralPath $Bundle -Recurse -Force)
@@ -96,6 +94,6 @@ try {
     $ChecksumLines += "$Sha256  $InstallerName"
     [IO.File]::WriteAllText($ChecksumFile, ($ChecksumLines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
     Write-Host "Built installer: $Installer"
-    Write-Host "Payload: $PayloadId; Inno Setup: $CompilerVersion"
+    Write-Host "Payload: $PayloadId; Inno Setup compiler: $IsccPath"
     Write-Host "Updated SHA256SUMS. Keep the portable ZIP and dependency sources alongside this unsigned installer."
 } finally { Pop-Location }

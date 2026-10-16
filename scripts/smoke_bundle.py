@@ -65,7 +65,16 @@ def prepare_fixtures(destination: Path, include_raw: bool = True) -> list[Path]:
     return files
 
 
+def configure_console_output() -> None:
+    # Windows redirected consoles may use cp1252. Keep full Unicode paths in
+    # the UTF-8 JSON report, while allowing logs to escape unsupported glyphs.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
+
+
 def main() -> int:
+    configure_console_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
     parser.add_argument("--fixtures", type=Path, default=ROOT / "build/testfixtures")

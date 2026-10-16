@@ -1,0 +1,125 @@
+import copy
+import hashlib
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+import publish_verified_012 as p
+
+
+def release(draft=True):
+    return {'id': 42, 'tag_name': p.TAG, 'target_commitish': p.BUILD_SHA, 'name': 'Luma 0.1.2',
+            'body': p.NOTES, 'prerelease': False, 'draft': draft,
+            'assets': [{'name': name, 'size': size, 'digest': 'sha256:' + digest, 'state': 'uploaded'}
+                       for name, (size, digest) in p.ASSETS.items()]}
+
+
+def build():
+    owner = {'id': p.REPO_ID, 'full_name': p.REPO}
+    run = {'id': p.RUN_ID, 'head_sha': p.BUILD_SHA, 'head_branch': 'feature/performance',
+           'event': 'push', 'status': 'completed', 'conclusion': 'success',
+           'path': '.github/workflows/thumbnail-validation.yml', 'repository': owner, 'head_repository': owner}
+    job = {'id': p.JOB_ID, 'run_id': p.RUN_ID, 'conclusion': 'success',
+           'steps': [{'name': name, 'conclusion': 'success'} for name in p.REQUIRED_STEPS]}
+    artifact = {'id': p.ARTIFACT_ID, 'name': 'luma-0.1.2-windows-candidate', 'expired': False,
+                'size_in_bytes': 174680853, 'digest': p.ARTIFACT_DIGEST,
+                'workflow_run': {'id': p.RUN_ID, 'head_sha': p.BUILD_SHA,
+                                 'repository_id': p.REPO_ID, 'head_repository_id': p.REPO_ID}}
+    return run, job, artifact
+
+
+class PublicationGuards(unittest.TestCase):
+    def test_exact_metadata(self):
+        p.validate_build(*build())
+        p.validate_release(release())
+        p.validate_tag({'ref': 'refs/tags/' + p.TAG, 'object': {'sha': p.BUILD_SHA, 'type': 'commit'}})
+
+    def test_wrong_commit_or_failed_build_rejected(self):
+        for field, value in [('head_sha', p.OLD_SHA), ('conclusion', 'failure'), ('status', 'in_progress'),
+                             ('head_branch', 'main'), ('event', 'pull_request')]:
+            with self.subTest(field=field):
+                run, job, artifact = build()
+                run[field] = value
+                with self.assertRaises(RuntimeError): p.validate_build(run, job, artifact)
+
+    def test_shell_or_installer_failure_rejected_even_if_job_success(self):
+        for name in p.REQUIRED_STEPS:
+            with self.subTest(step=name):
+                run, job, artifact = build()
+                next(s for s in job['steps'] if s['name'] == name)['conclusion'] = 'failure'
+                with self.assertRaises(RuntimeError): p.validate_build(run, job, artifact)
+
+    def test_wrong_artifact_rejected(self):
+        for field, value in [('id', 1), ('expired', True), ('digest', 'sha256:wrong'), ('size_in_bytes', 1)]:
+            run, job, artifact = build()
+            artifact[field] = value
+            with self.assertRaises(RuntimeError): p.validate_build(run, job, artifact)
+        run, job, artifact = build()
+        artifact['workflow_run']['head_sha'] = p.OLD_SHA
+        with self.assertRaises(RuntimeError): p.validate_build(run, job, artifact)
+
+    def test_tag_cannot_target_publisher_or_old_version(self):
+        for sha, kind, tag in [(p.OLD_SHA, 'commit', p.TAG), (p.BUILD_SHA, 'tag', p.TAG),
+                               (p.BUILD_SHA, 'commit', 'v0.1.0')]:
+            with self.assertRaises(RuntimeError):
+                p.validate_tag({'ref': 'refs/tags/' + tag, 'object': {'sha': sha, 'type': kind}})
+
+    def test_release_identity_and_bytes_fail_closed(self):
+        for field, value in [('target_commitish', p.OLD_SHA), ('tag_name', 'v0.1.0'), ('prerelease', True),
+                             ('body', 'Changed notes'), ('name', 'Other release')]:
+            item = release(); item[field] = value
+            with self.assertRaises(RuntimeError): p.validate_release(item)
+        for field, value in [('digest', 'sha256:wrong'), ('size', 1), ('state', 'starter')]:
+            item = release(); item['assets'][0][field] = value
+            with self.assertRaises(RuntimeError): p.validate_release(item)
+
+    def test_only_missing_draft_assets_can_resume(self):
+        item = release(); item['assets'].pop()
+        p.validate_release(item, complete=False)
+        with self.assertRaises(RuntimeError): p.validate_release(item)
+        item = release(); item['assets'].append(copy.deepcopy(item['assets'][0]))
+        with self.assertRaises(RuntimeError): p.validate_release(item, complete=False)
+        item = release(); item['assets'][0]['name'] = 'unexpected.exe'
+        with self.assertRaises(RuntimeError): p.validate_release(item, complete=False)
+
+    def test_local_bytes_and_manifest(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            data = b'exact tested binary'
+            digest = hashlib.sha256(data).hexdigest()
+            manifest = (digest + '  app.zip\n').encode()
+            expected = {'app.zip': (len(data), digest), 'SHA256SUMS': (len(manifest), hashlib.sha256(manifest).hexdigest())}
+            (directory / 'app.zip').write_bytes(data)
+            (directory / 'SHA256SUMS').write_bytes(manifest)
+            with patch.object(p, 'ASSETS', expected), patch.object(p, 'AUXILIARY', {}):
+                p.validate_files(directory)
+                (directory / 'app.zip').write_bytes(b'X' * len(data))
+                with self.assertRaises(RuntimeError): p.validate_files(directory)
+                (directory / 'app.zip').write_bytes(data)
+                (directory / 'unexpected').write_text('x')
+                with self.assertRaises(RuntimeError): p.validate_files(directory)
+
+    def test_auxiliary_report_is_pinned_but_not_published(self):
+        self.assertEqual(set(p.AUXILIARY), {'WINDOWS-SMOKE-REPORT.json'})
+        self.assertFalse(set(p.AUXILIARY) & set(p.ASSETS))
+        with self.assertRaises(RuntimeError):
+            p.upload_asset(42, Path('WINDOWS-SMOKE-REPORT.json'))
+
+    def test_wrong_repository_or_branch_stops_before_network(self):
+        with patch.dict(p.os.environ, {'GITHUB_REPOSITORY': p.REPO, 'GITHUB_REF': 'refs/heads/main'}), \
+             patch.object(p, 'api') as api, patch('sys.argv', ['publisher']):
+            with self.assertRaises(RuntimeError): p.main()
+            api.assert_not_called()
+
+    def test_no_rebuild_or_force_or_deletion(self):
+        source = Path(p.__file__).read_text()
+        self.assertNotIn("'DELETE'", source)
+        self.assertNotIn('force=true', source)
+        self.assertNotIn('PyInstaller', source)
+        self.assertNotIn('build_windows.ps1', source)
+        self.assertIn("'draft': True", source)
+        self.assertIn('verify_public_downloads()', source)
+
+
+if __name__ == '__main__':
+    unittest.main()

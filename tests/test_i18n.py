@@ -174,7 +174,9 @@ def test_viewer_localized_controls_use_stable_data_and_raw_details(qapp, tmp_pat
         window.tone.setCurrentIndex(1)
         window.reset_display()
         assert window.tone.currentData() == 'Reinhard'
-        path = tmp_path / 'Black {version} <raw> 中文.exr'
+        # Real fixture paths must also be legal on Windows; markup-like values
+        # remain covered by the metadata and diagnostic strings below.
+        path = tmp_path / 'Black {version} [raw] 中文.exr'
         path.write_bytes(b'x')
         window.path = path
         window.filename.setText(path.name)

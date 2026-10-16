@@ -11,7 +11,7 @@ import ctypes
 import math
 import sys
 
-from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QRectF, QPointF, QSize, Qt
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QRectF, QPoint, QPointF, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QIconEngine, QKeySequence, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QHBoxLayout, QMenu, QStyle, QToolButton, QWidget, QWidgetAction
 
@@ -22,7 +22,7 @@ SHADOW_MARGIN = 10  # logical pixels included in native popup geometry
 
 
 MENU_STYLE = """
-QMenu#luma_popup { background: transparent; border: 0; padding: 18px; color: #eeeeee; font-size: 13px; icon-size: 20px; }
+QMenu#luma_popup { background: transparent; border: 0; padding: 18px; menu-scrollable: 1; color: #eeeeee; font-size: 13px; icon-size: 20px; }
 QMenu#luma_popup::item { background: transparent; padding: 9px 16px 9px 12px; border-radius: 5px; }
 QMenu#luma_popup::item:selected { background: #404040; }
 QMenu#luma_popup::item:disabled { color: #777777; }
@@ -165,6 +165,21 @@ def menu_icon(kind):
     return QIcon(_MenuIconEngine(kind))
 
 
+def clamp_popup_position(position, size, work_area):
+    """Keep the complete popup (including its alpha shadow) in logical bounds.
+
+    Do not scale these QScreen/QWidget coordinates by devicePixelRatio. A
+    monitor may have negative coordinates or reserved bars on any edge. Native
+    QMenu remains responsible for row layout/scrolling; never resize it here.
+    """
+    if work_area.isEmpty():
+        return QPoint(position)
+    rightmost = max(work_area.left(), work_area.right() - size.width() + 1)
+    bottommost = max(work_area.top(), work_area.bottom() - size.height() + 1)
+    return QPoint(max(work_area.left(), min(position.x(), rightmost)),
+                  max(work_area.top(), min(position.y(), bottommost)))
+
+
 class RoundedMenu(QMenu):
     """A real QMenu: translucent corners, native rows, 140ms paint-level fade."""
     def __init__(self, parent=None):
@@ -186,6 +201,12 @@ class RoundedMenu(QMenu):
         self.open_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.open_animation.setStartValue(0.)
         self.open_animation.setEndValue(1.)
+        self._adjusting_bounds = False
+        self._scroll_layout_height = 0
+        self.aboutToShow.connect(self._prepare_work_area)
+        self._bounds_timer = QTimer(self)
+        self._bounds_timer.setSingleShot(True)
+        self._bounds_timer.timeout.connect(self._keep_in_work_area)
 
     def add_icon_action(self, text, kind, callback):
         # Keep translated keys and existing QShortcuts, but give Qt a real
@@ -254,15 +275,76 @@ class RoundedMenu(QMenu):
         # checkmarks on our transparent style surface. Do not replace this.
         super().paintEvent(event)
 
+    def _prepare_work_area(self):
+        # Qt selects the popup monitor before aboutToShow, including native
+        # tool-button/exec() paths. A height cap alone clips rows: QMenu only
+        # initializes its native scroll flags if its layout exceeds the screen
+        # geometry (which on Windows includes the taskbar). Request that native
+        # overflow layout only when content exceeds the usable work area; the
+        # actual widget is capped to the work area, including its shadow.
+        self._scroll_layout_height = 0
+        screen = self.screen()
+        if screen is None or screen.availableGeometry().isEmpty():
+            self.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+            return
+        available_height = screen.availableGeometry().height()
+        self.setMaximumHeight(available_height)
+        if super().sizeHint().height() > available_height:
+            self._scroll_layout_height = screen.geometry().height() + 1
+
+    def sizeHint(self):
+        size = super().sizeHint()
+        if getattr(self, '_scroll_layout_height', 0):
+            size.setHeight(max(size.height(), self._scroll_layout_height))
+        return size
+
+    def _keep_in_work_area(self):
+        if not self.isVisible() or self._adjusting_bounds:
+            return
+        screen = self.screen()
+        if screen is None:
+            return
+        # Native Windows QMenu placement can use the full monitor geometry,
+        # which includes the taskbar. Enforce the available work area after Qt
+        # has picked the monitor and laid out the menu, including shadow gutter.
+        # https://doc.qt.io/qt-6/qscreen.html#availableGeometry-prop
+        position = clamp_popup_position(self.pos(), self.size(), screen.availableGeometry())
+        if position != self.pos():
+            self._adjusting_bounds = True
+            try:
+                self.move(position)
+            finally:
+                self._adjusting_bounds = False
+
+    def _queue_bounds_check(self):
+        if (self.isVisible() and hasattr(self, '_bounds_timer')
+                and not self._adjusting_bounds):
+            self._bounds_timer.start(0)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._queue_bounds_check()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._queue_bounds_check()
+
     def showEvent(self, event):
         self.open_animation.stop()
         animate = menu_animations_enabled(self)
         self.fade_effect.setOpacity(0. if animate else 1.)
         super().showEvent(event)
+        self._keep_in_work_area()
+        # Qt can finalize its popup position after showEvent. Recheck on the
+        # next event turn, also covering native button/exec() opening paths.
+        self._queue_bounds_check()
         if animate:
             self.open_animation.start()
 
     def hideEvent(self, event):
+        self._scroll_layout_height = 0
+        self.setMaximumHeight(16777215)
+        self._bounds_timer.stop()
         self.open_animation.stop()
         self.fade_effect.setOpacity(1.)
         super().hideEvent(event)

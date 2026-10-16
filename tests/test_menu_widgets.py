@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QPoint, QSize, Qt, QAbstractAnimation
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QAbstractAnimation
 from PySide6.QtGui import QAccessible, QContextMenuEvent, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
@@ -288,3 +288,93 @@ def test_copy_shortcut_inside_each_popup_and_focus_return(qapp, viewer):
     QTest.keyClick(menu.strip_buttons[0], Qt.Key.Key_Escape)
     qapp.processEvents()
     assert viewer.canvas.hasFocus()
+
+
+@pytest.mark.parametrize('position,size,area,expected', [
+    ((758, 607), (266, 161), (0, 0, 1024, 720), (758, 559)),  # actual Windows failure
+    ((-10, -20), (266, 161), (48, 32, 976, 688), (48, 32)),  # left/top taskbars
+    ((900, 600), (266, 161), (0, 0, 976, 720), (710, 559)),  # right taskbar
+    ((-100, 680), (266, 161), (-1280, -200, 1280, 900), (-266, 539)),
+    ((900, -80), (266, 161), (800, -200, 1280, 900), (900, -80)),  # already valid
+])
+def test_work_area_clamp_uses_logical_full_popup_bounds(position, size, area, expected):
+    from luma.menu_widgets import clamp_popup_position
+    result = clamp_popup_position(QPoint(*position), QSize(*size), QRect(*area))
+    assert result == QPoint(*expected)
+    assert QRect(*area).contains(QRect(result, QSize(*size)))
+
+
+@pytest.mark.parametrize('edge', ['bottom', 'left', 'top', 'right'])
+def test_native_popup_reclamps_reserved_work_area_without_resizing(qapp, monkeypatch, edge):
+    menu = RoundedMenu()
+    menu.add_icon_action('Copy', 'copy', lambda: None)
+    menu.add_icon_action('Open', 'image', lambda: None)
+    real = QApplication.primaryScreen().availableGeometry()
+    insets = {'bottom': (0, 0, 0, -48), 'left': (48, 0, 0, 0),
+              'top': (0, 48, 0, 0), 'right': (0, 0, -48, 0)}
+    area = real.adjusted(*insets[edge])
+    monkeypatch.setattr(menu, 'screen', lambda: SimpleNamespace(availableGeometry=lambda: area))
+    anchor = real.topLeft() if edge in ('left', 'top') else real.bottomRight()
+    menu.popup(anchor)
+    qapp.processEvents()
+    assert area.contains(menu.geometry())
+    size = menu.size()
+    # A late native placement/move must be corrected too, without changing
+    # keyboard/action geometry or recursively scheduling itself indefinitely.
+    menu.move(anchor)
+    qapp.processEvents()
+    assert area.contains(menu.geometry())
+    assert menu.size() == size
+    assert not menu._bounds_timer.isActive()
+    first = menu.actions()[0]
+    QTest.keyClick(menu, Qt.Key.Key_Down)
+    assert menu.activeAction() is first
+    QTest.keyClick(menu, Qt.Key.Key_Escape)
+    assert not menu.isVisible() and not menu._bounds_timer.isActive()
+
+
+@pytest.mark.parametrize('rows', [10, 40])
+def test_over_tall_popup_uses_native_scroll_within_reserved_work_area(qapp, monkeypatch, rows):
+    # Cover both the subtle case that fits the full monitor but not the work
+    # area, and content taller than the full monitor. Height-only clipping
+    # would keep geometry in bounds while making the final rows inaccessible.
+    screen = QApplication.primaryScreen()
+    full = screen.geometry()
+    area = QRect(full.left(), full.top(), full.width(), min(220, full.height() - 40))
+    menu = RoundedMenu()
+    monkeypatch.setattr(menu, 'screen', lambda: SimpleNamespace(
+        availableGeometry=lambda: area, geometry=lambda: full))
+    calls = []
+    actions = [menu.add_icon_action(f'Item {index}', 'copy',
+               lambda checked=False, index=index: calls.append(index)) for index in range(rows)]
+    menu.popup(area.bottomRight())
+    qapp.processEvents()
+    assert area.contains(menu.geometry())
+    assert menu.columnCount() == 1
+    assert menu.actionGeometry(actions[-1]).bottom() >= menu.height()
+    QTest.keyClick(menu, Qt.Key.Key_End)
+    qapp.processEvents()
+    assert menu.activeAction() is actions[-1]
+    assert area.contains(menu.geometry())
+    assert menu.rect().contains(menu.actionGeometry(actions[-1]))
+    QTest.keyClick(menu, Qt.Key.Key_Home)
+    qapp.processEvents()
+    assert menu.activeAction() is actions[0]
+    assert menu.rect().contains(menu.actionGeometry(actions[0]))
+    # Native arrow navigation must bring every row fully into view, rather
+    # than just moving an invisible active action beyond a clipped widget.
+    for action in actions[1:]:
+        QTest.keyClick(menu, Qt.Key.Key_Down)
+        qapp.processEvents()
+        assert menu.activeAction() is action
+        assert menu.rect().contains(menu.actionGeometry(action))
+        assert area.contains(menu.geometry())
+    QTest.keyClick(menu, Qt.Key.Key_Return)
+    assert calls == [rows - 1] and not menu.isVisible()
+    # Reopening resets native scroll position and the work-area constraints.
+    menu.popup(area.bottomRight())
+    qapp.processEvents()
+    QTest.keyClick(menu, Qt.Key.Key_Home)
+    assert menu.rect().contains(menu.actionGeometry(actions[0]))
+    QTest.keyClick(menu, Qt.Key.Key_Escape)
+    assert not menu.isVisible()

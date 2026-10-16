@@ -560,17 +560,22 @@ def test_render_multiple_strips_matches_single_rows():
     (6, Image.Transpose.ROTATE_270), (7, Image.Transpose.TRANSVERSE),
     (8, Image.Transpose.ROTATE_90),
 ])
-@pytest.mark.parametrize("sixteen_bit", [False, True], ids=["rgb", "gray16"])
-def test_tiff_orientation_applied_once_and_source_unchanged(tmp_path, orientation, operation, sixteen_bit):
+@pytest.mark.parametrize("pixel_mode", ["rgb", "gray8", "gray16"])
+@pytest.mark.parametrize("compression", ["raw", "tiff_lzw", "tiff_adobe_deflate"])
+def test_tiff_orientation_applied_once_and_source_unchanged(tmp_path, orientation, operation, pixel_mode, compression):
+    sixteen_bit = pixel_mode == "gray16"
     values = (np.array([[0, 65535, 12345], [40000, 20000, 1000]], dtype=np.uint16)
               if sixteen_bit else rgb_array(3, 2))
+    if pixel_mode == "gray8":
+        values = np.array([[0, 255, 48], [156, 78, 4]], dtype=np.uint8)
     source = Image.fromarray(values)
     expected = np.asarray(source.transpose(operation))
     exif = Image.Exif()
     exif[274] = orientation
     path = tmp_path / "oriented.tiff"
-    source.save(path, exif=exif)
+    source.save(path, exif=exif, compression=compression)
     original = path.read_bytes()
+    _assert_tiff_storage(path, original, values, orientation, compression)
     decoded = d.decode_image(path)
     assert (decoded.width, decoded.height) == (expected.shape[1], expected.shape[0])
     assert not decoded.linear
@@ -581,7 +586,23 @@ def test_tiff_orientation_applied_once_and_source_unchanged(tmp_path, orientatio
         assert np.all(decoded.pixels[..., 3] == 1)
         assert "16-bit" in decoded.metadata["Source depth"]
     else:
+        if pixel_mode == "gray8":
+            expected = np.repeat(expected[..., None], 3, axis=2)
         np.testing.assert_array_equal(decoded.pixels[..., :3], expected)
         assert np.all(decoded.pixels[..., 3] == 255)
     assert decoded.metadata["Orientation"] == f"EXIF {orientation}; applied"
     assert path.read_bytes() == original
+
+
+def _assert_tiff_storage(path, original, values, orientation, compression):
+    # Read only the header: encoded dimensions/pixels must be unrotated.
+    with path.open("rb") as stream, Image.open(stream) as header:
+        assert header.tag_v2[256] == values.shape[1]
+        assert header.tag_v2[257] == values.shape[0]
+        assert header.tag_v2[274] == orientation
+        if compression == "raw":
+            assert original[:2] == b"II"
+            encoded = b"".join(original[offset:offset + count]
+                               for offset, count in zip(header.tag_v2[273], header.tag_v2[279]))
+            expected = values.astype("<u2").tobytes() if values.dtype == np.uint16 else values.tobytes()
+            assert encoded == expected

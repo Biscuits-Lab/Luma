@@ -177,10 +177,12 @@ def _pillow_source_depth(source: Image.Image, path: Path) -> str:
 
 
 def _decode_pillow(path: Path) -> ImageData:
-    with warnings.catch_warnings():
+    # A stream avoids Pillow's filename-mmap path, which uses already-oriented
+    # TIFF dimensions as raw storage geometry for mapped grayscale modes.
+    with warnings.catch_warnings(), path.open('rb') as stream:
         warnings.simplefilter('error', Image.DecompressionBombWarning)
         try:
-            source = Image.open(path)
+            source = Image.open(stream)
         except UnidentifiedImageError as exc:
             raise DecodeError('Unrecognized or damaged image data.') from exc
         with source:

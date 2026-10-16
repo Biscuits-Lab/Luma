@@ -131,7 +131,8 @@ def generate_thumbnail(path, mode, edge):
         elif mode == "raw":
             result = _raw(path, edge)
         else:
-            with Image.open(path) as image:
+            # Keep raw TIFF storage geometry out of Pillow's filename mmap path.
+            with path.open("rb") as stream, Image.open(stream) as image:
                 if image.mode in ("I", "F") or image.mode.startswith("I;16"):
                     result = _linear_or_high_precision(path, edge)
                 else:

@@ -121,6 +121,16 @@ class InstallerLanguageTests(unittest.TestCase):
         self.assertIn("LayoutLumaWizard(CurPageID)", script)
         self.assertIn("DisableDirPage=no", script)
 
+    def test_pascal_arrays_cannot_be_misread_as_inno_sections(self):
+        # Inno scans leading '[' before Pascal compilation, even inside [Code].
+        # Keep array/set literals on the preceding expression's line.
+        for name in ("Luma.iss", "LumaUI.iss"):
+            source = (self.root / "packaging/windows" / name).read_text(encoding="utf-8")
+            if name == "Luma.iss":
+                source = source.split("[Code]", 1)[1]
+            with self.subTest(name=name):
+                self.assertIsNone(re.search(r"(?m)^\s*\[", source))
+
     def test_compact_task_choice_preserves_native_silent_and_previous_defaults(self):
         ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
         self.assertIn("LumaDesktopTouched and not WizardSilent", ui)

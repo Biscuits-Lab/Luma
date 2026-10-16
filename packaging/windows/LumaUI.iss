@@ -107,8 +107,8 @@ begin
     end;
   end;
   Log('LUMA_UI ' + Format(
-    'page=%d;footer=%d;button_height=%d;primary_width=%d;secondary_width=%d;scale_x_100=%d;scale_y_100=%d;window=%d;directory=%d;desktop=%d;next=%d;cancel=%d',
-    [PageID, LumaFooter.Height, WizardForm.NextButton.Height, WizardForm.NextButton.Width,
+    'page=%d;footer=%d;button_height=%d;primary_width=%d;secondary_width=%d;scale_x_100=%d;scale_y_100=%d;window=%d;directory=%d;desktop=%d;next=%d;cancel=%d', [
+     PageID, LumaFooter.Height, WizardForm.NextButton.Height, WizardForm.NextButton.Width,
      WizardForm.CancelButton.Width, ScaleX(100), ScaleY(100), WizardForm.Handle,
      WizardForm.DirEdit.Handle, LumaDesktop.Handle, WizardForm.NextButton.Handle,
      WizardForm.CancelButton.Handle]));

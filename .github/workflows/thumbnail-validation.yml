@@ -36,7 +36,7 @@ jobs:
         run: ./scripts/build_windows.ps1
       - name: Verify installer and release-safety contracts
         shell: pwsh
-        run: ./.venv-build/Scripts/python.exe -m pytest scripts/test_installer_contract.py scripts/test_release_gate.py scripts/test_update_managed_contract.py scripts/test_installer_busy_guard.py scripts/test_registration_confirmation_contract.py scripts/test_update_legacy_contract.py -q
+        run: ./.venv-build/Scripts/python.exe -m pytest scripts/test_installer_contract.py scripts/test_release_gate.py scripts/test_update_managed_contract.py scripts/test_installer_busy_guard.py scripts/test_registration_confirmation_contract.py scripts/test_update_legacy_contract.py scripts/test_installer_progress_contract.py -q
       - name: Verify localized controls and relative zoom at 200 percent scaling
         id: scaled_ui
         continue-on-error: true

@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import urllib.request
 from unittest.mock import patch
 
@@ -204,6 +205,27 @@ def action_ready(snapshot: dict, target: str) -> bool:
     return len(matches) == 1
 
 
+def live_owned_window(api, job, window: int) -> dict | None:
+    """Take a best-effort snapshot of an HWND owned by this private job.
+
+    EnumWindows/IsWindowVisible do not pin an HWND. Windows can destroy it
+    between enumeration and GetWindowRect during the old-to-new GUI handoff.
+    Only ERROR_INVALID_WINDOW_HANDLE is a retryable disappeared-window result.
+    Recheck ownership afterwards because Windows can also recycle handles.
+    """
+    if not api.owned(window, job) or not api.u.IsWindowVisible(window):
+        return None
+    try:
+        control = api.control(window)
+    except OSError as error:
+        if getattr(error, "winerror", None) != 1400:
+            raise
+        return None
+    if not api.owned(window, job) or not api.u.IsWindowVisible(window):
+        return None
+    return control
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--old-installer", type=Path, help="Optional cached exact official 0.1.2 Setup")
@@ -285,10 +307,9 @@ def main() -> int:
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             for window in api.windows(job.job):
-                if api.u.IsWindowVisible(window):
-                    control = api.control(window)
-                    if process_path(control["pid"]) == executable.resolve(strict=True):
-                        return window, control["pid"]
+                control = live_owned_window(api, job.job, window)
+                if control is not None and process_path(control["pid"]) == executable.resolve(strict=True):
+                    return window, control["pid"]
             time.sleep(0.1)
         raise TimeoutError("No visible owned GUI from the expected executable")
 
@@ -395,6 +416,7 @@ def main() -> int:
         report["passed"] = True
     except BaseException as error:
         report["error"] = f"{type(error).__name__}: {error}"
+        report["traceback"] = traceback.format_exc()
     finally:
         if job and job.job:
             try:

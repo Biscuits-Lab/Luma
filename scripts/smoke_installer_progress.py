@@ -84,6 +84,14 @@ def progress_rows(path: Path) -> list[dict[str, int]]:
             if "LUMA_PROGRESS window=" in line]
 
 
+def progress_complete(row: dict, position: int, low: int, high: int) -> bool:
+    # Inno maps its logical progress range to the native 0..65535 range.
+    # Completion requires BOTH independent observations, not just a UI frame.
+    if not (low == 0 and high == 65535 and low <= position <= high):
+        raise AssertionError(f"Unexpected native progress range/value: position={position}, minimum={low}, maximum={high}")
+    return row["maximum"] > 0 and row["current"] == row["maximum"] and position == high
+
+
 def install_with_progress(command: list[str], log: Path, output: Path, timeout: int = 240) -> dict:
     """Run the same lifecycle operation visibly, with a bounded owned observer."""
     import os
@@ -96,12 +104,15 @@ def install_with_progress(command: list[str], log: Path, output: Path, timeout: 
     api, report = Native(), {"passed": False, "samples": [], "scope": "actual lifecycle install"}
     job = InstallerJob(api, command)
     try:
-        deadline, captured = time.monotonic() + timeout, False
+        deadline, captured, observed_complete = time.monotonic() + timeout, False, False
         while job.active():
             if time.monotonic() >= deadline:
                 raise TimeoutError("Owned installer exceeded its lifecycle deadline")
             rows = progress_rows(log)
-            if rows:
+            # Once the real engine and native gauge both finish, Setup replaces
+            # or destroys the progress page. Do not query its stale HWND while
+            # waiting for the still-required successful process exit.
+            if rows and not observed_complete:
                 row = rows[-1]
                 window, gauge = row["window"], row["gauge"]
                 if (api.owned(window, job.job) and api.owned(gauge, job.job)
@@ -112,8 +123,10 @@ def install_with_progress(command: list[str], log: Path, output: Path, timeout: 
                                   "Read actual native progress")
                         return result.value
                     position, low, high = query(0x0408), query(0x0407, 1), query(0x0407, 0)
-                    if not (low == 0 and high == 65535 and low <= position <= high):
-                        raise AssertionError("Unexpected native progress range/value")
+                    observed_complete = progress_complete(row, position, low, high)
+                    if observed_complete:
+                        report["completed_observation"] = {"position": position, "minimum": low,
+                            "maximum": high, "engine_telemetry": row}
                     if not report["samples"] or report["samples"][-1]["position"] != position:
                         report["samples"].append({"position": position, "minimum": low, "maximum": high,
                                                   "engine_telemetry": row})
@@ -146,4 +159,5 @@ def install_with_progress(command: list[str], log: Path, output: Path, timeout: 
         report["forced_process_cleanup"] = job.forced_cleanup
         if job.forced_cleanup:
             report["passed"] = False
+        report["engine_telemetry"] = progress_rows(log)
         output.write_text(json.dumps(report, indent=2), encoding="utf-8")

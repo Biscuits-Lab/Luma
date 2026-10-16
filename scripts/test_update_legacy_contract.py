@@ -2,6 +2,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("legacy_update_contract", ROOT / "scripts/smoke_update_legacy.py")
@@ -67,6 +69,27 @@ class LegacyUpdateContracts(unittest.TestCase):
         invocation = source.split("    def invoke(pid, executable, target):", 1)[1].split("    def process_path", 1)[0]
         self.assertLess(invocation.index("wait_ui("), invocation.index('"invoke", target'))
         self.assertEqual(invocation.count('"invoke", target'), 1)
+
+    def test_destroyed_window_is_retried_but_other_errors_fail(self):
+        api = SimpleNamespace(owned=Mock(return_value=True),
+            u=SimpleNamespace(IsWindowVisible=Mock(return_value=True)),
+            control=Mock(return_value={"pid": 42}))
+        self.assertEqual(legacy.live_owned_window(api, 1, 2), {"pid": 42})
+        error = OSError("destroyed HWND")
+        error.winerror = 1400
+        api.control.side_effect = error
+        self.assertIsNone(legacy.live_owned_window(api, 1, 2))
+        error.winerror = 5
+        with self.assertRaises(OSError):
+            legacy.live_owned_window(api, 1, 2)
+        api.control.side_effect = None
+        api.owned.side_effect = [True, False]
+        self.assertIsNone(legacy.live_owned_window(api, 1, 2))
+        api.owned.side_effect = None
+        api.owned.return_value = False
+        api.control.reset_mock()
+        self.assertIsNone(legacy.live_owned_window(api, 1, 2))
+        api.control.assert_not_called()
 
     def test_native_capture_waits_for_real_ui_and_only_retries_blank_frame(self):
         source = (ROOT / "scripts/smoke_update_legacy.py").read_text()

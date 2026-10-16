@@ -104,8 +104,20 @@ TokenState Inspect(HANDLE token, const wchar_t* label) {
         token, TokenElevation, L"TokenElevation").TokenIsElevated;
     result.elevationType = Query<TOKEN_ELEVATION_TYPE>(
         token, TokenElevationType, L"TokenElevationType");
-    result.hasRestrictions = Query<DWORD>(
-        token, TokenHasRestrictions, L"TokenHasRestrictions");
+    // Microsoft documents DWORD, but some Windows builds report a different
+    // ReturnLength. This is telemetry, never a substitute for Safe() checks.
+    DWORD restrictionValue = 0, restrictionBytes = 0;
+    const BOOL restrictionOk = GetTokenInformation(
+        token, TokenHasRestrictions, &restrictionValue,
+        sizeof(restrictionValue), &restrictionBytes);
+    const DWORD restrictionError = restrictionOk ? ERROR_SUCCESS : GetLastError();
+    result.hasRestrictions = restrictionOk &&
+        (restrictionBytes == sizeof(BOOLEAN) || restrictionBytes == sizeof(DWORD))
+            ? (restrictionValue != 0 ? 1u : 0u) : MAXDWORD;
+    std::fwprintf(stderr,
+        L"TokenHasRestrictions diagnostic: success=%d error=%lu bytes=%lu "
+        L"value=%lu (4294967295=unknown)\n",
+        restrictionOk, restrictionError, restrictionBytes, result.hasRestrictions);
     result.session = Query<DWORD>(token, TokenSessionId, L"TokenSessionId");
     const auto integrity = QueryBuffer(
         token, TokenIntegrityLevel, L"TokenIntegrityLevel");

@@ -2,7 +2,7 @@ name: Windows EXR, thumbnail and installer validation
 
 on:
   push:
-    branches: [feature/exr-performance]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

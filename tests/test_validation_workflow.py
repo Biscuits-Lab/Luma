@@ -50,3 +50,13 @@ def test_native_installer_preflight_runs_before_expensive_build_and_cannot_be_ig
     assert 'run: python scripts/preflight_installer.py' in preflight
     assert 'continue-on-error' not in preflight
     assert 'build/installer-preflight/**' in source
+
+
+def test_current_work_is_validated_on_main_and_legacy_release_is_manual_only():
+    source = WORKFLOW.read_text(encoding='utf-8')
+    assert 'branches: [main]' in source
+    assert 'feature/exr-performance' not in source
+    legacy = (WORKFLOW.parent / 'windows-release.yml').read_text(encoding='utf-8')
+    triggers = legacy.split('permissions:', 1)[0]
+    assert 'workflow_dispatch:' in triggers
+    assert 'push:' not in triggers

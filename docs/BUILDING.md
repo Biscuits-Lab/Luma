@@ -43,7 +43,7 @@ This downloads source archives, copies license/attribution files, and records so
 
 ## Public Windows release workflow
 
-`.github/workflows/windows-release.yml` uses standard `windows-latest`, not a larger/paid runner. It is bounded to the initial `0.1.0` release: a push to `main` can publish `v0.1.0` if absent, and a manual dispatch or `v0.1.0` tag can retry that same release. An already-published complete release is not overwritten. Future versions require an intentional workflow/version change.
+`.github/workflows/windows-release.yml` uses standard `windows-latest`, not a larger/paid runner. It is bounded to the initial `0.1.0` release: only an intentional manual dispatch can retry that same release; automatic push/tag publication is disabled now that the initial release is complete. An already-published complete release is not overwritten. Future versions require an intentional workflow/version change.
 
 The Windows job installs pinned wheels, runs native tests before packaging, builds the folder, runs the bundled EXE against generated format fixtures, creates a conventional ZIP with `Luma/Luma.exe`, and prepares the dependency-source material. Checksums cover both ZIP assets. Only the release job gets `contents: write`; build/test runs use read-only repository permissions. No workflow runs on a pull request with write privileges.
 
@@ -57,7 +57,7 @@ The updater expects the exact Windows ZIP name and reads its SHA-256 from `SHA25
 
 ## Current development candidate
 
-`.github/workflows/thumbnail-validation.yml` validates the `feature/exr-performance`
+`.github/workflows/thumbnail-validation.yml` validates the `main`
 branch as version 0.1.3. It never publishes a release. The exact commit must pass
 viewer/decoder regressions, 200% Qt scaling tests, native bridge tests, packaged
 viewer smoke (including a full 8192-square Unicode EXR), real required-surrogate

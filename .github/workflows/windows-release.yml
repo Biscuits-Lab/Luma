@@ -1,9 +1,6 @@
 name: Windows build and initial release
 
 on:
-  push:
-    branches: [main]
-    tags: [v0.1.0]
   workflow_dispatch:
 
 permissions:

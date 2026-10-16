@@ -1,0 +1,19 @@
+# Details overlay and display histogram
+
+Details (`I` or the lower-left information button) is a 304 logical-pixel overlay over the right side of the canvas. It does not reserve layout width. Opening or closing it preserves the canvas viewport, fit baseline, transform, zoom and center. The panel scrolls between the title/footer bars at smaller window sizes. Its exterior shadow is mouse-transparent; controls and image interaction outside the panel remain available.
+
+The RGB histogram measures the **currently rendered display preview**, including exposure, tone mapping and channel selection. It is not a scene-linear HDR histogram. The 0–255 horizontal scale uses one bin per display channel value; all channels share a linear frequency scale. The image background/checkerboard is excluded. Fully transparent sampled pixels are excluded; partially transparent pixels contribute their unpremultiplied RGB once, without alpha weighting. A fully transparent sample is explicitly labeled, not displayed as a plausible empty chart.
+
+Histogram work is demand-only. Navigation with Details hidden performs no pixel sampling. A latest-state queued request samples the existing Qt pixmap using nearest-neighbor scaling to at most 256 × 256 pixels before conversion to QImage/RGBA. It never opens the source, re-decodes EXR, copies a full image, or retains an RGBA render buffer. A bounded 12-entry LRU stores only three 256-bin uint32 arrays and scalar counts (36 KiB of bin data), keyed by file signature and render parameters. Navigation, failure and cancellation discard obsolete states. Rotation, pan, zoom and background changes do not change the image's RGB distribution, so do not recompute it.
+
+The frosted backdrop renders only the corresponding existing canvas scene region into a sample of at most 32,768 pixels / 256 pixels per edge. A Gaussian blur and neutral dark tint run on that small sample, beneath crisp controls. Changes coalesce to at most 20 captures per second; signatures prevent repaint loops. Nothing captures while hidden. Windows high-contrast, disabled overlapping content or disabled transparency selects a solid fallback; no OS preference is changed. See `luma/glass_backdrop.py`.
+
+Optional photo fields appear only when the source provides valid information: camera maker/model, lens, shutter speed, aperture, ISO, focal length, capture time and a valid GPS coordinate pair. Times retain embedded timezone information when available; no timezone or place is inferred. GPS is shown only as embedded coordinates, without network lookup. Original metadata remains selectable plain text.
+
+## Reproduction and evidence
+
+Run `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_histogram.py tests/test_details_overlay.py tests/test_glass_backdrop.py tests/test_photo_metadata.py` in the development environment. These tests cover known RGB/alpha distributions, source-size bounds, hidden demand, cache bounds, stale results, real tone/exposure/channel rendering, one-decode behavior, repeated fit/zoom/pan toggles, input bounds and narrow-window scroll geometry.
+
+`QT_QPA_PLATFORM=offscreen python -m scripts.render_details_preview --output build/details-evidence --language zh-CN` captures the actual Qt window before/after opening Details using a generated fixture. Add `--width 800` for the narrow layout. The script asserts that opening Details did not change the canvas geometry or zoom. Offscreen Linux evidence does not certify native Windows rendering.
+
+A development measurement on 2026-10-16, with the 8192 × 4096 Qt pixmap already resident, sampled 32,768 pixels / 128 KiB before histogram counting: 100 runs, median 0.77 ms, p95 1.23 ms. These are machine-specific sampling/count timings, not end-to-end decode or native Windows claims. The synchronous bounded operation deliberately avoids transferring QPixmap to a worker thread or keeping a full-size image alive for background processing.

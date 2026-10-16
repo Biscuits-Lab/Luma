@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare exact upstream LGPL source material for the same public release.
+"""Prepare exact upstream dependency source material for the same public release.
 
 Reads official source archives only. Does not compile or run upstream source.
 Photographic RAW test fixtures are intentionally not redistributed.
@@ -41,8 +41,15 @@ def prepare(output: Path, version: str) -> Path:
     staging.mkdir(parents=True, exist_ok=True)
     license_manifest = json.loads((ROOT / "packaging/licenses/upstream/manifest.json").read_text(encoding="utf-8"))
     records = []
-    for name in ("qtbase", "pyside"):
-        component = license_manifest["components"][name]
+    components = license_manifest["components"]
+    qt_tag = components["qtbase"]["tag"]
+    for name in ("qtbase", "pyside", "qttranslations"):
+        if components.get(name, {}).get("tag") != qt_tag:
+            raise RuntimeError(f"Source version mismatch: {name} must match Qt {qt_tag}")
+    if components["qttranslations"].get("translations", {}).get("license_expression") != "BSD-3-Clause":
+        raise RuntimeError("Qt translation catalog license review is missing")
+    for name in ("qtbase", "pyside", "qttranslations"):
+        component = components[name]
         filename = f"{name}-{component['tag']}.tar.gz"
         cached = cache / filename
         # Reuse the license collector's downloaded source if available.
@@ -86,9 +93,13 @@ def prepare(output: Path, version: str) -> Path:
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", staging / "THIRD_PARTY_NOTICES.md")
     (staging / "README.txt").write_text(
         "Luma dependency source material\n\n"
-        "These are official matching source snapshots for the LGPL components shipped in Luma.\n"
+        "These are official matching source snapshots for dependencies shipped in Luma.\n"
         "See source-manifest.json for exact revisions, submodule revisions and SHA-256 hashes.\n"
         "Qt Base: unpack qtbase archive; build instructions and CMake scripts are included.\n"
+        "Qt translations: unpack qttranslations; translations/qtbase_zh_CN.ts and qtbase_zh_TW.ts\n"
+        "are the matching editable sources for the bundled BSD-3-Clause catalogs.\n"
+        "Compile with matching Qt Linguist lrelease: lrelease <catalog>.ts -qm <catalog>.qm.\n"
+        "The source module also contains tools with separate GPL/Qt-exception terms.\n"
         "Qt for Python: unpack pyside archive; use its build scripts with the matching Qt.\n"
         "rawpy: unpack rawpy archive; external/LibRaw and external/LibRaw-cmake are populated.\n"
         "Build against 64-bit Python 3.12 and the compatible native compiler/toolchain.\n"

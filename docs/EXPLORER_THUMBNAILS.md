@@ -14,8 +14,8 @@ automatically. A portable packaged Windows copy makes one background startup
 check, registering a fresh copy or completing its own older registration.
 Source/development, headless thumbnail and private smoke-test modes never do
 this. The user's own selection of Luma in Windows Default Apps remains separate.
-There is no additional thumbnail checkbox. Settings provides status, explicit
-repair, and a link to Windows Default Apps.
+There is no additional thumbnail checkbox or Windows integration section in
+Luma Settings. Use Windows Settings itself to choose the default image viewer.
 
 Registration is per-user, x64-only, and scoped to Luma-owned CLSIDs/ProgIDs,
 Applications\\Luma.exe and OpenWith/capabilities entries. Never write UserChoice, its hash, extension defaults,
@@ -27,13 +27,13 @@ Per-format Luma.Image.* associations preserve effective common-image providers,
 queried through Windows' association API. Open With can instead select
 Applications\\Luma.exe; that owned route has a content-aware handler for
 HDR/EXR/raster/RAW streams. It does not change unrelated extension/provider keys.
-Settings checks the effective .hdr and .exr providers separately rather than
+The read-only registration status API checks effective .hdr and .exr providers separately rather than
 treating a successful registration receipt as proof that Windows selects either one.
 
 Automatic setup refuses another portable copy's ownership or externally modified
 values. Installer upgrades permit only validated sibling payloads belonging to
 the same installation. Every pending journal snapshot must pass that owner check
-before recovery. Explicit Settings repair can move this copy's registration;
+before recovery. The explicit registration API can move this copy's registration;
 conflicting third-party values are still preserved. Full uninstallation removes
 only unchanged values owned by the application.
 
@@ -50,8 +50,9 @@ Uninstall compares every value with the value Luma wrote before restoring it.
 Later user/third-party changes are left untouched. No recursive deletion of shared
 registry keys. Notify association changes; do not restart Explorer or clear the
 user's thumbnail cache. Per-user COM may not activate in elevated applications.
-Portable registration depends on the bundle's absolute location; repair is
-needed after moving it. Installed upgrades move the owned registration to the
+Portable registration depends on the bundle's absolute location; keep that
+folder in place, or restore its original location if it was moved. Installed
+upgrades move the owned registration to the
 new version while retaining old payloads. Automatic setup failure is visible and
 does not prevent image viewing.
 
@@ -140,8 +141,11 @@ matters. Do not claim otherwise.
 
 ## If .hdr or .exr still displays an icon
 
-Check Settings' registration and effective .hdr/.exr association messages. A copied
-or moved portable folder may need repair; selecting an executable in Open With
+Check any automatic-setup failure notice and the selected Windows default app.
+Restore a moved portable folder to its registered location; for an installed
+copy, close Luma and rerun its installer to retry recovery of its own registration.
+Setup cannot take ownership from another Luma copy or overwrite unrelated changes
+just by retrying. Selecting an executable in Open With
 can use a different association than the registered per-format Default Apps
 entry. Reopen the folder after changing the default app. Explorer's own view and
 thumbnail settings, cache, the file's variant, and the fixed worker limits also

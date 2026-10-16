@@ -30,9 +30,11 @@ import zipfile
 from PySide6.QtCore import QObject, QStandardPaths, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+    QApplication, QDialog, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QFrame, QWidget, QSizePolicy, QPushButton,
     QVBoxLayout,
 )
+
+from .i18n import tr, error_text
 
 REPOSITORY = "Biscuits-Lab/Luma"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
@@ -72,13 +74,13 @@ class Version:
     def parse(cls, value: str) -> "Version":
         match = _VERSION_RE.fullmatch(value) if isinstance(value, str) and len(value) <= 128 else None
         if not match:
-            raise UpdateError("The release has an unsupported version number.")
+            raise UpdateError(tr("The release has an unsupported version number."))
         major, minor, patch, prerelease, build = match.groups()
         pre = tuple(prerelease.split(".")) if prerelease else ()
         if any(not p or (p.isdigit() and len(p) > 1 and p[0] == "0") for p in pre):
-            raise UpdateError("The release has an invalid pre-release version.")
+            raise UpdateError(tr("The release has an invalid pre-release version."))
         if build and any(not p for p in build.split(".")):
-            raise UpdateError("The release has an invalid build version.")
+            raise UpdateError(tr("The release has an invalid build version."))
         return cls(int(major), int(minor), int(patch), pre, build or "")
 
     def __str__(self):
@@ -141,21 +143,21 @@ def _https_parts(url: str):
             raise ValueError
         return parsed
     except (ValueError, TypeError) as error:
-        raise UpdateError("An update URL was rejected because it is not an approved HTTPS URL.") from error
+        raise UpdateError(error_text("An update URL was rejected because it is not an approved HTTPS URL.", error)) from error
 
 
 def validate_asset_url(url: str, tag: str, filename: str) -> str:
     expected = f"https://github.com/{REPOSITORY}/releases/download/{quote(tag, safe='')}/{quote(filename, safe='')}"
     _https_parts(url)
     if url != expected:
-        raise UpdateError("An update download did not belong to the official Luma release.")
+        raise UpdateError(tr("An update download did not belong to the official Luma release."))
     return url
 
 
 def validate_download_location(url: str, initial_url: str) -> str:
     parsed = _https_parts(url)
     if url != initial_url and parsed.hostname not in CDN_HOSTS:
-        raise UpdateError("The update server redirected to an unapproved download host.")
+        raise UpdateError(tr("The update server redirected to an unapproved download host."))
     return url
 
 
@@ -169,13 +171,13 @@ class _SafeRedirectHandler(HTTPRedirectHandler):
         if self.allow_cdn:
             validate_download_location(newurl, self.initial_url)
         elif newurl != self.initial_url:
-            raise UpdateError("The release API redirected to an unexpected address.")
+            raise UpdateError(tr("The release API redirected to an unexpected address."))
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _check_cancel(cancelled: Callable[[], bool]):
     if cancelled():
-        raise UpdateCancelled("Update cancelled. Your existing copy is unchanged.")
+        raise UpdateCancelled(tr("Update cancelled. Your existing copy is unchanged."))
 
 
 def _transfer(url: str, limit: int, sink, *, expected_size: int | None = None,
@@ -194,42 +196,42 @@ def _transfer(url: str, limit: int, sink, *, expected_size: int | None = None,
             if allow_cdn:
                 validate_download_location(actual_url, url)
             elif actual_url != url:
-                raise UpdateError("The release API returned an unexpected address.")
+                raise UpdateError(tr("The release API returned an unexpected address."))
             if response.getcode() != 200:
-                raise UpdateError("The update server returned an unexpected response.")
+                raise UpdateError(tr("The update server returned an unexpected response."))
             if response.headers.get("Content-Encoding", "identity").lower() != "identity":
-                raise UpdateError("The update server used an unsupported content encoding.")
+                raise UpdateError(tr("The update server used an unsupported content encoding."))
             length = response.headers.get("Content-Length")
             try:
                 declared = int(length) if length is not None else None
             except ValueError as error:
-                raise UpdateError("The update server returned an invalid download size.") from error
+                raise UpdateError(error_text("The update server returned an invalid download size.", error)) from error
             if declared is not None and (declared < 0 or declared > limit or (expected_size is not None and declared != expected_size)):
-                raise UpdateError("The download size did not match the release or exceeded the safety limit.")
+                raise UpdateError(tr("The download size did not match the release or exceeded the safety limit."))
             while True:
                 _check_cancel(cancelled)
                 if time.monotonic() - started > DOWNLOAD_TIMEOUT:
-                    raise UpdateError("The download timed out. Please try again.")
+                    raise UpdateError(tr("The download timed out. Please try again."))
                 chunk = response.read(min(CHUNK_SIZE, limit - received + 1))
                 if not chunk:
                     break
                 received += len(chunk)
                 if received > limit or (expected_size is not None and received > expected_size):
-                    raise UpdateError("The download exceeded the expected size.")
+                    raise UpdateError(tr("The download exceeded the expected size."))
                 sink.write(chunk)
                 progress(received, expected_size or declared or 0)
             if (expected_size is not None and received != expected_size) or (declared is not None and received != declared):
-                raise UpdateError("The download was incomplete. Please try again.")
+                raise UpdateError(tr("The download was incomplete. Please try again."))
         _check_cancel(cancelled)
         return received
     except HTTPError as error:
         if error.code == 404 and url == LATEST_URL:
-            raise UpdateError("No published stable release is available yet.") from error
+            raise UpdateError(error_text("No published stable release is available yet.", error)) from error
         if error.code in (403, 429):
-            raise UpdateError("GitHub temporarily limited update requests. Please try again later.") from error
-        raise UpdateError(f"The update server returned HTTP {error.code}. Please try again later.") from error
+            raise UpdateError(error_text("GitHub temporarily limited update requests. Please try again later.", error)) from error
+        raise UpdateError(error_text("The update server returned HTTP {code}. Please try again later.", error, code=error.code)) from error
     except (URLError, TimeoutError, OSError) as error:
-        raise UpdateError("Unable to download the update. Check your connection and available disk space, then try again.") from error
+        raise UpdateError(error_text("Unable to download the update. Check your connection and available disk space, then try again.", error)) from error
 
 
 def _fetch_bytes(url: str, limit: int, **kwargs) -> bytes:
@@ -241,36 +243,36 @@ def _fetch_bytes(url: str, limit: int, **kwargs) -> bytes:
 
 def parse_release(data: dict) -> Release:
     if not isinstance(data, dict) or data.get("draft") is not False or data.get("prerelease") is not False:
-        raise UpdateError("The update service did not return a published stable release.")
+        raise UpdateError(tr("The update service did not return a published stable release."))
     tag = data.get("tag_name")
     version = Version.parse(tag)
     if version.prerelease:
-        raise UpdateError("Pre-release updates are not installed by this updater.")
+        raise UpdateError(tr("Pre-release updates are not installed by this updater."))
     release_url = f"{RELEASES_URL}/tag/{quote(tag, safe='')}"
     if data.get("html_url") != release_url:
-        raise UpdateError("The release link did not belong to the official Luma repository.")
+        raise UpdateError(tr("The release link did not belong to the official Luma repository."))
     expected_names = {f"Luma-{version}-windows-x64.zip": MAX_DOWNLOAD_BYTES, "SHA256SUMS": MAX_MANIFEST_BYTES}
     assets = data.get("assets")
     if not isinstance(assets, list):
-        raise UpdateError("The release asset list is invalid.")
+        raise UpdateError(tr("The release asset list is invalid."))
     selected = {}
     for asset in assets:
         if not isinstance(asset, dict):
-            raise UpdateError("The release asset list is invalid.")
+            raise UpdateError(tr("The release asset list is invalid."))
         name = asset.get("name")
         if not isinstance(name, str):
-            raise UpdateError("A release asset has an invalid filename.")
+            raise UpdateError(tr("A release asset has an invalid filename."))
         if name not in expected_names:
             continue
         if name in selected:
-            raise UpdateError("The release has ambiguous duplicate update assets.")
+            raise UpdateError(tr("The release has ambiguous duplicate update assets."))
         size = asset.get("size")
         if type(size) is not int or not 0 < size <= expected_names[name]:
-            raise UpdateError("A release asset has an invalid or excessive size.")
+            raise UpdateError(tr("A release asset has an invalid or excessive size."))
         url = validate_asset_url(asset.get("browser_download_url"), tag, name)
         digest = asset.get("digest")
         if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest)):
-            raise UpdateError("A release asset has an invalid SHA-256 digest.")
+            raise UpdateError(tr("A release asset has an invalid SHA-256 digest."))
         selected[name] = ReleaseAsset(name, url, size, digest[7:].lower() if digest else None)
     return Release(version, tag, release_url, selected.get(f"Luma-{version}-windows-x64.zip"), selected.get("SHA256SUMS"))
 
@@ -280,28 +282,28 @@ def check_for_update(*, cancelled=lambda: False, opener=None) -> Release:
     try:
         data = json.loads(raw)
     except (ValueError, UnicodeError) as error:
-        raise UpdateError("GitHub returned an invalid release description.") from error
+        raise UpdateError(error_text("GitHub returned an invalid release description.", error)) from error
     return parse_release(data)
 
 
 def checksum_for(manifest: bytes, filename: str) -> str:
     if len(manifest) > MAX_MANIFEST_BYTES:
-        raise UpdateError("The checksum manifest is too large.")
+        raise UpdateError(tr("The checksum manifest is too large."))
     try:
         lines = manifest.decode("utf-8-sig").splitlines()
     except UnicodeError as error:
-        raise UpdateError("The checksum manifest is invalid.") from error
+        raise UpdateError(error_text("The checksum manifest is invalid.", error)) from error
     matches = []
     for line in lines:
         if not line.strip():
             continue
         match = re.fullmatch(r"([0-9a-fA-F]{64}) [ *](.+)", line)
         if not match:
-            raise UpdateError("The checksum manifest is invalid.")
+            raise UpdateError(tr("The checksum manifest is invalid."))
         if match[2] == filename:
             matches.append(match[1].lower())
     if len(matches) != 1:
-        raise UpdateError("The checksum manifest must contain exactly one checksum for this update.")
+        raise UpdateError(tr("The checksum manifest must contain exactly one checksum for this update."))
     return matches[0]
 
 
@@ -312,48 +314,48 @@ def verify_checksum(path: Path, expected: str, *, cancelled=lambda: False):
             _check_cancel(cancelled)
             digest.update(chunk)
     if not re.fullmatch(r"[0-9a-fA-F]{64}", expected) or digest.hexdigest() != expected.lower():
-        raise UpdateError("SHA-256 verification failed. The update was discarded; your existing copy is unchanged.")
+        raise UpdateError(tr("SHA-256 verification failed. The update was discarded; your existing copy is unchanged."))
 
 
 def _safe_member_name(info: zipfile.ZipInfo) -> tuple[str, ...]:
     # Inspect orig_filename as ZipInfo truncates filename at an embedded NUL.
     name = info.orig_filename
     if not name or "\\" in name or "\x00" in name or name.startswith("/"):
-        raise UpdateError("The update archive contains an unsafe path.")
+        raise UpdateError(tr("The update archive contains an unsafe path."))
     path = name[:-1] if name.endswith("/") else name
     parts = tuple(path.split("/"))
     if len(parts) > 32 or len(path) > 220:
-        raise UpdateError("The update archive contains an excessive path.")
+        raise UpdateError(tr("The update archive contains an excessive path."))
     for part in parts:
         if not part or part in (".", "..") or part[-1] in (" ", ".") or any(ord(c) < 32 or c in '<>:"|?*' for c in part):
-            raise UpdateError("The update archive contains an unsafe Windows path.")
+            raise UpdateError(tr("The update archive contains an unsafe Windows path."))
         if part.split(".", 1)[0].rstrip(" .").upper() in _RESERVED_NAMES:
-            raise UpdateError("The update archive contains a reserved Windows filename.")
+            raise UpdateError(tr("The update archive contains a reserved Windows filename."))
     mode = info.external_attr >> 16
     file_type = stat.S_IFMT(mode)
     if file_type not in (0, stat.S_IFREG, stat.S_IFDIR) or stat.S_ISLNK(mode):
-        raise UpdateError("The update archive contains a link or special file.")
+        raise UpdateError(tr("The update archive contains a link or special file."))
     # DOS reparse points can also represent links on Windows.
     if info.external_attr & 0x400:
-        raise UpdateError("The update archive contains a reparse point.")
+        raise UpdateError(tr("The update archive contains a reparse point."))
     if info.flag_bits & 0x1:
-        raise UpdateError("Encrypted update archives are not supported.")
+        raise UpdateError(tr("Encrypted update archives are not supported."))
     if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
-        raise UpdateError("The update archive uses an unsupported compression method.")
+        raise UpdateError(tr("The update archive uses an unsupported compression method."))
     return parts
 
 
 def safe_extract_zip(archive: Path, destination: Path, *, cancelled=lambda: False) -> Path:
     """Extract into an empty, privately created staging directory, never in place."""
     if destination.exists() and (destination.is_symlink() or any(destination.iterdir())):
-        raise UpdateError("The update staging directory is not empty.")
+        raise UpdateError(tr("The update staging directory is not empty."))
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
     try:
         with zipfile.ZipFile(archive) as bundle:
             members = bundle.infolist()
             if not members or len(members) > MAX_MEMBERS:
-                raise UpdateError("The update archive contains an invalid number of files.")
+                raise UpdateError(tr("The update archive contains an invalid number of files."))
             checked = []
             seen = {}
             total = 0
@@ -362,27 +364,27 @@ def safe_extract_zip(archive: Path, destination: Path, *, cancelled=lambda: Fals
                 parts = _safe_member_name(info)
                 key = "/".join(parts).casefold()
                 if key in seen:
-                    raise UpdateError("The update archive contains duplicate Windows paths.")
+                    raise UpdateError(tr("The update archive contains duplicate Windows paths."))
                 seen[key] = info.is_dir()
                 if info.file_size < 0 or info.file_size > MAX_FILE_BYTES:
-                    raise UpdateError("The update archive contains an oversized file.")
+                    raise UpdateError(tr("The update archive contains an oversized file."))
                 total += info.file_size
                 if total > MAX_EXTRACTED_BYTES:
-                    raise UpdateError("The update archive exceeds the extracted size limit.")
+                    raise UpdateError(tr("The update archive exceeds the extracted size limit."))
                 checked.append((info, parts))
             for key in seen:
                 parent = PurePosixPath(key).parent
                 while str(parent) != ".":
                     if str(parent) in seen and not seen[str(parent)]:
-                        raise UpdateError("The update archive contains conflicting paths.")
+                        raise UpdateError(tr("The update archive contains conflicting paths."))
                     parent = parent.parent
             if shutil.disk_usage(root).free < total + 64 * 1024 * 1024:
-                raise UpdateError("There is not enough free disk space to install this update.")
+                raise UpdateError(tr("There is not enough free disk space to install this update."))
             for info, parts in checked:
                 _check_cancel(cancelled)
                 target = root.joinpath(*parts)
                 if not target.resolve().is_relative_to(root):
-                    raise UpdateError("The update archive tried to leave its staging directory.")
+                    raise UpdateError(tr("The update archive tried to leave its staging directory."))
                 if info.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
@@ -393,26 +395,26 @@ def safe_extract_zip(archive: Path, destination: Path, *, cancelled=lambda: Fals
                         _check_cancel(cancelled)
                         written += len(chunk)
                         if written > info.file_size or written > MAX_FILE_BYTES:
-                            raise UpdateError("An extracted file exceeded its expected size.")
+                            raise UpdateError(tr("An extracted file exceeded its expected size."))
                         output.write(chunk)
                 if written != info.file_size:
-                    raise UpdateError("An extracted update file was incomplete.")
+                    raise UpdateError(tr("An extracted update file was incomplete."))
         candidates = [root / "Luma.exe", root / "Luma" / "Luma.exe"]
         executable = [path for path in candidates if path.is_file() and not path.is_symlink()]
         if len(executable) != 1:
-            raise UpdateError("The update archive does not contain one expected Luma.exe.")
+            raise UpdateError(tr("The update archive does not contain one expected Luma.exe."))
         with executable[0].open("rb") as stream:
             if stream.read(2) != b"MZ":
-                raise UpdateError("The update does not contain a Windows executable.")
+                raise UpdateError(tr("The update does not contain a Windows executable."))
         return executable[0]
     except (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError) as error:
-        raise UpdateError("The update ZIP archive is invalid or damaged.") from error
+        raise UpdateError(error_text("The update ZIP archive is invalid or damaged.", error)) from error
 
 
 def default_install_root() -> Path:
     location = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)
     if not location:
-        raise UpdateError("A writable local application-data directory is unavailable.")
+        raise UpdateError(tr("A writable local application-data directory is unavailable."))
     return Path(location) / "updates"
 
 
@@ -425,42 +427,42 @@ def install_release(release: Release, install_root: Path, *, cancelled=lambda: F
     Incomplete downloads and failed extraction are automatically removed.
     """
     if not release.downloadable:
-        raise UpdateError("This release does not yet have a Windows package and SHA256SUMS.")
+        raise UpdateError(tr("This release does not yet have a Windows package and SHA256SUMS."))
     archive, checksums = release.archive, release.checksums
     if str(Version.parse(release.tag)) != str(release.version):
-        raise UpdateError("The release tag and version do not match.")
+        raise UpdateError(tr("The release tag and version do not match."))
     # Revalidate even callers that construct Release directly cannot supply a URL
     # outside the official repository or an unexpected package name.
     if release.version.prerelease or archive.name != f"Luma-{release.version}-windows-x64.zip" or checksums.name != "SHA256SUMS":
-        raise UpdateError("This is not a supported stable Windows update.")
+        raise UpdateError(tr("This is not a supported stable Windows update."))
     for asset, limit in ((archive, MAX_DOWNLOAD_BYTES), (checksums, MAX_MANIFEST_BYTES)):
         validate_asset_url(asset.url, release.tag, asset.name)
         if type(asset.size) is not int or not 0 < asset.size <= limit:
-            raise UpdateError("A release asset exceeds the download safety limit.")
+            raise UpdateError(tr("A release asset exceeds the download safety limit."))
     install_root = Path(install_root)
     if install_root.is_symlink():
-        raise UpdateError("The update folder cannot be a symbolic link.")
+        raise UpdateError(tr("The update folder cannot be a symbolic link."))
     install_root.mkdir(parents=True, exist_ok=True)
     install_root = install_root.resolve()
     if shutil.disk_usage(install_root).free < archive.size + 64 * 1024 * 1024:
-        raise UpdateError("There is not enough free disk space to download this update.")
+        raise UpdateError(tr("There is not enough free disk space to download this update."))
     try:
         with tempfile.TemporaryDirectory(prefix=".staging-", dir=install_root) as temp:
             staging = Path(temp)
-            status("Downloading checksums…")
+            status(tr("Downloading checksums…"))
             manifest = _fetch_bytes(checksums.url, MAX_MANIFEST_BYTES, expected_size=checksums.size, allow_cdn=True, cancelled=cancelled, opener=opener)
             expected = checksum_for(manifest, archive.name)
             if checksums.digest and hashlib.sha256(manifest).hexdigest() != checksums.digest:
-                raise UpdateError("The checksum manifest does not match GitHub's SHA-256 digest.")
+                raise UpdateError(tr("The checksum manifest does not match GitHub's SHA-256 digest."))
             if archive.digest and archive.digest != expected:
-                raise UpdateError("The release checksums disagree. The update was not installed.")
+                raise UpdateError(tr("The release checksums disagree. The update was not installed."))
             package = staging / "download.zip"
-            status("Downloading update…")
+            status(tr("Downloading update…"))
             with package.open("xb") as stream:
                 _transfer(archive.url, MAX_DOWNLOAD_BYTES, stream, expected_size=archive.size, allow_cdn=True, cancelled=cancelled, progress=progress, opener=opener)
-            status("Verifying SHA-256…")
+            status(tr("Verifying SHA-256…"))
             verify_checksum(package, expected, cancelled=cancelled)
-            status("Installing a separate copy…")
+            status(tr("Installing a separate copy…"))
             executable = safe_extract_zip(package, staging / "app", cancelled=cancelled)
             relative_executable = executable.relative_to(staging / "app")
             _check_cancel(cancelled)
@@ -469,11 +471,11 @@ def install_release(release: Release, install_root: Path, *, cancelled=lambda: F
             name = f"Luma-{release.version}-{staging.name.removeprefix('.staging-')}"
             destination = install_root / name
             if destination.exists():
-                raise UpdateError("The update destination already exists. Please try again.")
+                raise UpdateError(tr("The update destination already exists. Please try again."))
             (staging / "app").rename(destination)
             return InstalledUpdate(str(release.version), destination, destination / relative_executable)
     except OSError as error:
-        raise UpdateError("The update could not be saved. Check disk space and folder permissions. Your existing copy is unchanged.") from error
+        raise UpdateError(error_text("The update could not be saved. Check disk space and folder permissions. Your existing copy is unchanged.", error)) from error
 
 
 class _UpdateSignals(QObject):
@@ -487,7 +489,7 @@ class UpdateDialog(QDialog):
     """User-initiated only: opening Settings does not make any network request."""
     def __init__(self, parent, current_version: str):
         super().__init__(parent)
-        self.setWindowTitle("Luma · Settings / Updates")
+        self.setWindowTitle(tr("Luma · Settings / Updates"))
         self.setMinimumWidth(480)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.current_version = current_version
@@ -502,47 +504,98 @@ class UpdateDialog(QDialog):
         self._signals.failed.connect(self._failed)
         self._signals.progress.connect(self._progress)
         self._signals.status.connect(self._status)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 22, 24, 20)
-        layout.setSpacing(15)
-        layout.addWidget(QLabel(f"Luma {current_version}"))
-        self.description = QLabel("Check the official GitHub repository for a stable Windows update.\nNo account or sign-in is required.")
-        self.description.setWordWrap(True)
-        layout.addWidget(self.description)
-        self.status_label = QLabel("Updates are checked only when you click below.")
-        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.status_label.setWordWrap(True)
-        self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self.status_label)
+        from .settings_widgets import (
+            ActivityStatusLabel, DetailsPanel, DisplaySettingsPanel, SettingsCard,
+            SettingsCloseButton, badge, plain_label, settings_stylesheet,
+        )
+        self.setObjectName("luma_settings")
+        self.setStyleSheet(settings_stylesheet())
+        # Qt does not constrain an explicit resize to the usable desktop. At
+        # high DPI the screen's geometry is already in logical pixels; leave
+        # space for native borders/titlebar and let the body scroll instead.
+        screen = parent.screen() if parent is not None else self.screen()
+        width, height = 620, 310
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = max(self.minimumWidth(), min(width, available.width() - 32))
+            height = max(240, min(height, available.height() - 48))
+        self.resize(width, height)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 22, 24, 18)
+        outer.setSpacing(12)
+        header = QHBoxLayout()
+        title = plain_label(tr("Settings"))
+        title.setObjectName("settings_title")
+        header.addWidget(title)
+        header.addStretch()
+        self.close_button = SettingsCloseButton()
+        self.close_button.setAccessibleName(tr("Close"))
+        self.close_button.setToolTip(tr("Close"))
+        self.close_button.clicked.connect(self.reject)
+        header.addWidget(self.close_button)
+        outer.addLayout(header)
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        self.scroll_area.setWidget(content)
+        outer.addWidget(self.scroll_area, 1)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 5, 0)
+        layout.setSpacing(12)
+        # Settings can also be opened by tests/standalone tools without a viewer.
+        # Only offer working controls backed by this actual viewer window.
+        self.display_panel = None
+        if hasattr(parent, "background"):
+            self.display_panel = DisplaySettingsPanel(parent)
+            layout.addWidget(self.display_panel)
+        self.check_button = QPushButton(tr("Check for updates"))
+        self.check_button.setObjectName("check_updates")
+        self.check_button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.check_button.clicked.connect(self.check)
+        header_actions = QWidget()
+        header_actions.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        header_row = QHBoxLayout(header_actions)
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+        self.version_badge = badge(current_version)
+        header_row.addWidget(self.version_badge)
+        header_row.addWidget(self.check_button)
+        self.update_card = SettingsCard(tr("Version & updates"), "update", accessory=header_actions)
+        update_layout = self.update_card.body
+        self.status_label = ActivityStatusLabel()
+        self.status_label.setObjectName("update_status")
+        update_layout.addWidget(self.status_label)
         self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setAccessibleName(tr("Update progress"))
         self.progress_bar.setRange(0, 100)
         self.progress_bar.hide()
-        layout.addWidget(self.progress_bar)
-        self.check_button = QPushButton("Check for updates")
-        self.check_button.setObjectName("check_updates")
-        self.check_button.clicked.connect(self.check)
-        self.download_button = QPushButton("Download and install update")
+        update_layout.addWidget(self.progress_bar)
+        self.download_button = QPushButton(tr("Download and install update"))
         self.download_button.setObjectName("download_update")
         self.download_button.clicked.connect(self.download)
         self.download_button.hide()
-        self.launch_button = QPushButton("Launch new version and close Luma")
+        self.launch_button = QPushButton(tr("Launch new version and close Luma"))
         self.launch_button.setObjectName("launch_update")
         self.launch_button.clicked.connect(self.launch)
         self.launch_button.hide()
-        self.release_button = QPushButton("View release on GitHub")
+        self.release_button = QPushButton(tr("View release on GitHub"))
         self.release_button.clicked.connect(self.open_release)
         self.release_button.hide()
-        for widget in (self.check_button, self.download_button, self.launch_button, self.release_button):
-            layout.addWidget(widget)
-        from .shell_settings import ExplorerIntegrationPanel
-        self.explorer_panel = ExplorerIntegrationPanel(self)
-        layout.addWidget(self.explorer_panel)
-        row = QHBoxLayout()
-        row.addStretch()
-        self.close_button = QPushButton("Close")
-        self.close_button.clicked.connect(self.reject)
-        row.addWidget(self.close_button)
-        layout.addLayout(row)
+        for widget in (self.download_button, self.launch_button, self.release_button):
+            update_layout.addWidget(widget)
+        self.update_details = DetailsPanel(tr("About updates"))
+        self.description = plain_label(tr("Check the official GitHub repository for a stable Windows update.\nNo account or sign-in is required."), muted=True, wrap=True)
+        self.update_details.body.addWidget(self.description)
+        update_layout.addWidget(self.update_details)
+        layout.addWidget(self.update_card)
+        layout.addStretch(1)
+        # Enter must not initiate an update or download accidentally.
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+        self.close_button.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _start(self, function):
         if self._busy:
@@ -554,7 +607,8 @@ class UpdateDialog(QDialog):
         cancelled, signals = self._cancel.is_set, self._signals
         self.check_button.setEnabled(False)
         self.download_button.setEnabled(False)
-        self.close_button.setText("Cancel")
+        self.close_button.setAccessibleName(tr("Cancel"))
+        self.close_button.setToolTip(tr("Cancel"))
         self.progress_bar.setRange(0, 0)
         self.progress_bar.show()
 
@@ -566,7 +620,7 @@ class UpdateDialog(QDialog):
             except Exception as error:
                 if not cancelled():
                     try:
-                        signals.failed.emit(serial, str(error) if isinstance(error, UpdateError) else "The update could not be completed. Your existing copy is unchanged.")
+                        signals.failed.emit(serial, str(error) if isinstance(error, UpdateError) else error_text("The update could not be completed. Your existing copy is unchanged.", error))
                     except RuntimeError:
                         pass  # The dialog/application was closed during I/O.
 
@@ -579,7 +633,7 @@ class UpdateDialog(QDialog):
         self.download_button.hide()
         self.launch_button.hide()
         self.release_button.hide()
-        self.status_label.setText("Checking for a stable release…")
+        self.status_label.setText(tr("Checking for a stable release…"))
         self._start(lambda cancelled, progress, status: check_for_update(cancelled=cancelled))
 
     def download(self):
@@ -593,7 +647,8 @@ class UpdateDialog(QDialog):
         self.check_button.setEnabled(True)
         self.download_button.setEnabled(True)
         self.progress_bar.hide()
-        self.close_button.setText("Close")
+        self.close_button.setAccessibleName(tr("Close"))
+        self.close_button.setToolTip(tr("Close"))
 
     def _completed(self, serial, result):
         if serial != self._serial or self._cancel.is_set():
@@ -608,20 +663,20 @@ class UpdateDialog(QDialog):
                 self.status_label.setText(str(error))
                 return
             if not newer:
-                self.status_label.setText(f"You're up to date. Latest stable release: {result.version}")
+                self.status_label.setText(tr("You're up to date. Latest stable release: {version}", version=result.version))
             elif sys.platform != "win32":
-                self.status_label.setText(f"Luma {result.version} is available.\nDownload and installation from this window require Windows x64.")
+                self.status_label.setText(tr("Luma {version} is available.\nDownload and installation from this window require Windows x64.", version=result.version))
             elif not result.downloadable:
-                self.status_label.setText(f"Luma {result.version} is available.\nIts Windows ZIP or SHA256SUMS is not published yet. Please check again later.")
+                self.status_label.setText(tr("Luma {version} is available.\nIts Windows ZIP or SHA256SUMS is not published yet. Please check again later.", version=result.version))
             else:
                 size = result.archive.size / (1024 * 1024)
-                self.status_label.setText(f"Luma {result.version} is available ({size:.1f} MB).\nDownload and install will verify SHA-256 and install a separate copy in your local application-data folder. Your current copy stays available for rollback. The new version will run only when you click Launch.")
+                self.status_label.setText(tr("Luma {version} is available ({size:.1f} MB).\nDownload and install will verify SHA-256 and install a separate copy in your local application-data folder. Your current copy stays available for rollback. The new version will run only when you click Launch.", version=result.version, size=size))
                 self.download_button.show()
         elif isinstance(result, InstalledUpdate):
             self.installed = result
             self.download_button.hide()
             self.launch_button.show()
-            self.status_label.setText(f"Luma {result.version} is installed and ready to launch.\n{result.executable}\n\nYour previous copy and shortcuts are unchanged. Use the path above to open the new version later, or launch it now.")
+            self.status_label.setText(tr("Luma {version} is installed and ready to launch.\n{executable}\n\nYour previous copy and shortcuts are unchanged. Use the path above to open the new version later, or launch it now.", version=result.version, executable=result.executable))
 
     def _failed(self, serial, message):
         if serial != self._serial or self._cancel.is_set():
@@ -651,15 +706,15 @@ class UpdateDialog(QDialog):
             return
         executable = self.installed.executable
         if executable.is_symlink() or not executable.is_file() or not executable.resolve().is_relative_to(self.installed.directory.resolve()):
-            self.status_label.setText("The installed application is missing or was moved. Please install the update again.")
+            self.status_label.setText(tr("The installed application is missing or was moved. Please install the update again."))
             return
         try:
             # List arguments and shell=False prevent paths from becoming commands.
             environment = os.environ.copy()
             environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
             subprocess.Popen([str(executable)], cwd=str(executable.parent), env=environment, shell=False, close_fds=True)
-        except OSError:
-            self.status_label.setText("The new version could not be launched. Your current Luma is still running; you can use it and try again later.")
+        except OSError as error:
+            self.status_label.setText(error_text("The new version could not be launched. Your current Luma is still running; you can use it and try again later.", error))
             return
         self.accept()
         QApplication.instance().quit()

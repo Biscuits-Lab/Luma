@@ -29,6 +29,81 @@ void Require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+// Request one explicit row order from GDI. GetObject's DIBSECTION height
+// does not preserve the sign used at creation (Microsoft KB186586), so it
+// cannot tell us how to interpret a raw bmBits pointer. GetDIBits normalizes
+// both top-down and bottom-up bitmaps to this requested top-down layout.
+std::vector<BYTE> ReadTopDownBitmap(HBITMAP bitmap, int width, int height) {
+    Require(width > 0 && width <= 256 && height > 0 && height <= 256,
+            "Invalid bitmap readback dimensions");
+    BITMAP description{};
+    Require(GetObjectW(bitmap, sizeof(description), &description) == sizeof(description) &&
+                description.bmWidth == width && description.bmHeight == height &&
+                description.bmBitsPixel == 32,
+            "Bitmap dimensions/type do not match expected preview");
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;  // Explicit top-down output, not a query.
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    std::vector<BYTE> pixels(static_cast<size_t>(width) * height * 4);
+    HDC dc = GetDC(nullptr);
+    Require(dc != nullptr, "Cannot create bitmap inspection DC");
+    // The source bitmap is never selected into this or any test DC.
+    const int rows = GetDIBits(dc, bitmap, 0, static_cast<UINT>(height),
+                             pixels.data(), &info, DIB_RGB_COLORS);
+    ReleaseDC(nullptr, dc);
+    Require(rows == height, "Cannot inspect bitmap pixels");
+    return pixels;
+}
+
+void TestBitmapReadback() {
+    constexpr LONG width = 2, height = 3;
+    // Distinct rows and every alpha value differ. Flips, channel swaps, alpha
+    // loss and premultiplication must all fail this exact-byte regression.
+    const std::vector<BYTE> expected = {
+        7, 19, 31, 0,     43, 59, 71, 64,
+        83, 97, 109, 128, 127, 139, 151, 192,
+        163, 179, 191, 224, 211, 229, 241, 255,
+    };
+    for (const LONG signedHeight : {-height, height}) {
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = signedHeight;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        HBITMAP bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS,
+                                         &bits, nullptr, 0);
+        Require(bitmap != nullptr && bits != nullptr,
+                "Cannot create bitmap readback regression fixture");
+        try {
+            for (LONG y = 0; y < height; ++y) {
+                const LONG row = signedHeight < 0 ? y : height - 1 - y;
+                std::memcpy(static_cast<BYTE*>(bits) + static_cast<size_t>(row) * width * 4,
+                            expected.data() + static_cast<size_t>(y) * width * 4,
+                            static_cast<size_t>(width) * 4);
+            }
+            const auto actual = ReadTopDownBitmap(bitmap, width, height);
+            Require(actual == expected, "Bitmap readback changed orientation/color/alpha");
+            DIBSECTION observed{};
+            Require(GetObjectW(bitmap, sizeof(observed), &observed) == sizeof(observed),
+                    "Cannot inspect regression fixture header");
+            std::cout << "bitmap_readback_ok created_height=" << signedHeight
+                      << " reported_height=" << observed.dsBmih.biHeight
+                      << " orientation=top-down exact_bgra_alpha=true\n";
+        } catch (...) {
+            DeleteObject(bitmap);
+            throw;
+        }
+        DeleteObject(bitmap);
+    }
+}
+
 // Test-only expected probes, inherited by the standard-token surrogate
 // client. No production provider behavior or its resource limits are changed.
 void TestExpectedBitmap(HBITMAP bitmap) {
@@ -45,40 +120,7 @@ void TestExpectedBitmap(HBITMAP bitmap) {
                 width > 0 && width <= 256 && height > 0 && height <= 256 &&
                 count > 0 && count <= 16,
             "Invalid expected EXR pixel probes");
-    BITMAP description{};
-    Require(GetObjectW(bitmap, sizeof(description), &description) == sizeof(description) &&
-                description.bmWidth == width && description.bmHeight == height,
-            "EXR bitmap dimensions do not match expected preview");
-    BITMAPINFO info{};
-    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = width;
-    info.bmiHeader.biHeight = -height;  // Match Pillow's top-down probe rows.
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-    std::vector<BYTE> pixels(static_cast<size_t>(width) * height * 4);
-    DIBSECTION section{};
-    if (GetObjectW(bitmap, sizeof(section), &section) == sizeof(section) &&
-            section.dsBm.bmBits && section.dsBm.bmBitsPixel == 32 &&
-            section.dsBm.bmWidthBytes >= width * 4) {
-        // Inspect the original alpha bytes whenever the handle is a DIB.
-        // GDI conversion is unnecessary and BI_RGB's spare high byte is not
-        // itself an alpha-conversion contract.
-        const auto* bits = static_cast<const BYTE*>(section.dsBm.bmBits);
-        for (int y = 0; y < height; ++y) {
-            const int row = section.dsBmih.biHeight < 0 ? y : height - 1 - y;
-            std::memcpy(pixels.data() + static_cast<size_t>(y) * width * 4,
-                        bits + static_cast<size_t>(row) * section.dsBm.bmWidthBytes,
-                        static_cast<size_t>(width) * 4);
-        }
-    } else {
-        HDC dc = GetDC(nullptr);
-        Require(dc != nullptr, "Cannot create bitmap inspection DC");
-        const int rows = GetDIBits(dc, bitmap, 0, static_cast<UINT>(height),
-                                 pixels.data(), &info, DIB_RGB_COLORS);
-        ReleaseDC(nullptr, dc);
-        Require(rows == height, "Cannot inspect EXR bitmap pixels");
-    }
+    const auto pixels = ReadTopDownBitmap(bitmap, width, height);
     for (int probe = 0; probe < count; ++probe) {
         int x = 0, y = 0, bgra[4]{};
         expected >> x >> y >> bgra[0] >> bgra[1] >> bgra[2] >> bgra[3];
@@ -738,6 +780,7 @@ int wmain(int argc, wchar_t** argv) {
     HMODULE module = nullptr;
     int result = 1;
     try {
+        TestBitmapReadback();
         if (surrogate) {
             TestSurrogate(argv[2]);
             result = 0;

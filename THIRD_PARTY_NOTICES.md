@@ -6,6 +6,7 @@ Luma uses Qt for Python (PySide6/Shiboken6) and Qt under their available LGPL te
 |---|---:|---|
 | PySide6 Essentials and Shiboken6 | 6.12.0 | LGPL-3.0 option; Python bindings and runtime |
 | Qt Core, Gui, Widgets and platform dependencies | matching Qt runtime | LGPL-3.0 option plus bundled third-party licenses |
+| Qt Chinese translation catalogs (`qtbase_zh_CN.qm`, `qtbase_zh_TW.qm`) | qttranslations 6.12.0, matching Qt runtime | BSD-3-Clause option for the catalog artifacts; Qt community translations |
 | Pillow | 12.3.0 | MIT-CMU plus bundled codec notices |
 | NumPy | 2.5.4 | BSD and bundled numerical/runtime notices |
 | OpenEXR | 3.5.2 | BSD-3-Clause; native EXR decoding |
@@ -18,6 +19,16 @@ Luma uses Qt for Python (PySide6/Shiboken6) and Qt under their available LGPL te
 The authoritative versions, license declarations, full text paths and hashes for each build are in `_internal/licenses/manifest.json`. The collection contains full license files copied from the installed distributions, including Pillow's bundled codec and NumPy's numerical-library notices. Exact-source supplemental notices cover OpenEXR's statically bundled codecs/bindings, LibRaw copyright material, and CPython's documented OpenSSL/libffi/Expat/zlib notices. Qt/PySide notice gaps in wheels are filled by versioned official source-tree license texts and attributions, with source revisions and SHA-256 hashes in `_internal/licenses/upstream/manifest.json`. An upstream repository-wide notice collection may include components the minimal application does not ship.
 
 Build tools and tests are not intended as runtime features. PyInstaller's bootloader exception allows applications to retain their own licensing subject to their dependencies. See its [official licensing statement](https://pyinstaller.org/en/stable/license.html).
+
+## Qt translation catalogs and source-module tools
+
+The two bundled Chinese Qt catalogs come from the official `qt/qttranslations` 6.12.0 module, commit `2811457ceff8f0c24a1c4d14f947a283a17239d0`. They are community contributions; retain the upstream copyright and notice material with the application. This catalog license is checked separately from Qt Base's LGPL runtime license:
+
+- The pinned module's [translation artifact declaration](https://github.com/qt/qttranslations/blob/2811457ceff8f0c24a1c4d14f947a283a17239d0/translations/CMakeLists.txt) assigns `QT_COMMERCIAL_OR_BSD3` to the `Translations` package and associates each compiled `.qm` with its `.ts` source
+- The matching Qt Base [license-ID mapping](https://github.com/qt/qtbase/blob/025bdad181de241e81bf853c8a2d7bf3d19261a9/cmake/QtPublicSbomLicenseHelpers.cmake) defines that identifier as `LicenseRef-Qt-Commercial OR BSD-3-Clause`; Luma uses the BSD-3-Clause option for these catalogs
+- The source module also includes tools such as `translations/split-qt-ts.pl` under `GPL-3.0-only WITH Qt-GPL-exception-1.0` (or commercial terms). Those tools are not Luma runtime components. Their full GPL and Qt exception texts remain included in the repository-wide notice/source materials; their presence does not label the two catalog artifacts as GPL
+
+`_internal/licenses/upstream/qttranslations` contains the full BSD, GPL and Qt GPL exception texts, community attribution, and the relevant upstream declaration/tool headers. `_internal/licenses/upstream/manifest.json` records the exact module revision, source-archive SHA-256, notice hashes and both `.ts` source hashes. The build's `_internal/licenses/manifest.json` additionally records the shipped `.qm` hashes. The same release's dependency-source ZIP includes the unmodified matching `qttranslations` source archive and catalog rebuilding instructions. Re-audit this evidence when updating Qt; missing, mismatched or unreviewed translation license material fails the public build.
 
 ## LGPL components and replacement
 

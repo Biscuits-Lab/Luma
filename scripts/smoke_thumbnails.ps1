@@ -214,6 +214,7 @@ root, destination, manifest = map(Path, sys.argv[1:])
 sys.path.insert(0, str(root))
 from scripts.smoke_bundle import prepare_fixtures, prepare_hdr_thumbnail_fixtures, RAW_BLOB, RAW_NAME, RAW_URL
 from scripts.smoke_thumbnails import prepare_exr_thumbnail_fixtures, write_exr_thumbnail_expectations
+from scripts.generate_exr_moderate_fixture import write_moderate_exr_fixture
 
 expected_raw = "e03d193927a604de40fd0fd7a71e33fde878a0e1"
 if RAW_BLOB != expected_raw:
@@ -221,6 +222,13 @@ if RAW_BLOB != expected_raw:
 files = prepare_fixtures(destination, include_raw=True)
 files += prepare_hdr_thumbnail_fixtures(destination)
 files += prepare_exr_thumbnail_fixtures(destination)
+# Exercise nontrivial compressed data as well as the small band fixtures.
+# Source values are deterministic; compressed bytes may vary by codec build.
+moderate_exr = destination / "thumbnail-moderate-8192square-HALF-ZIP.exr"
+moderate_exr_recipe = write_moderate_exr_fixture(moderate_exr)
+if moderate_exr.stat().st_size > 256 * 1024 * 1024:
+    raise RuntimeError("Moderate EXR fixture exceeds the unchanged native input ceiling")
+files.append(moderate_exr)
 # The content-aware executable association must cover common JPEG as well.
 from PIL import Image
 jpeg = destination / "common-image.jpg"
@@ -269,6 +277,7 @@ for path in [alpha, *files]:
     })
 manifest.write_text(json.dumps({
     "raw_source": RAW_URL, "raw_git_blob": RAW_BLOB, "cases": cases,
+    "moderate_exr_recipe": moderate_exr_recipe,
 }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 '@ | Set-Content -LiteralPath $prepare -Encoding utf8
 

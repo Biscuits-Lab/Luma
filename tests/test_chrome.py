@@ -24,7 +24,8 @@ def test_custom_titlebar_rotation_and_window_states(qapp):
     assert win.info_button.geometry().left() - win.status_label.geometry().right() < 12
     assert win.info_button.geometry().right() < win.width() // 2
     assert win.maximize_button.iconSize().width() == 17
-    assert all(control.iconSize().width() == 17 for control in (win.rotate_button, win.delete_button, win.more_button))
+    assert all(control.iconSize().width() == 20 for control in (win.rotate_button, win.delete_button))
+    assert win.more_button.iconSize().width() == 17
     assert not win.filmstrip.isVisible()
     assert not win.sidebar.isVisible()
     assert not hasattr(win, 'brand_button')

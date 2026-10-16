@@ -21,6 +21,16 @@ datas = [
     (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
     (str(ROOT / "docs" / "REDISTRIBUTION.md"), "docs"),
 ]
+# Built-in Qt file dialogs/message buttons need the matching Qt catalog too.
+# Keep explicit application-local destinations; frozen Qt layouts vary by OS.
+from PySide6.QtCore import QLibraryInfo
+qt_translations = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath))
+for language in ("zh_CN", "zh_TW"):
+    catalog = qt_translations / f"qtbase_{language}.qm"
+    if not catalog.is_file():
+        raise SystemExit(f"Missing required Qt UI translation: {catalog}")
+    datas.append((str(catalog), "luma/translations"))
+
 # Native wheels can place DLLs in sibling .libs directories, outside packages.
 # Distribution RECORD metadata covers both delvewheel and auditwheel layouts,
 # including rawpy/libraw and OpenEXR's non-package extension dependencies.

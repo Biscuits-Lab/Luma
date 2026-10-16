@@ -1,7 +1,7 @@
 """Owned, per-user Explorer registration for the Windows x64 bundle.
 
 Import, registration_plan(), and status() are read-only. Call install/uninstall
-from setup, removal, or explicit Settings repair. Default Apps choice is separate.
+from setup, removal, or explicit registration repair. Default Apps choice is separate.
 
 Different pre-existing values are never replaced except an exact, unowned
 Applications open command for a validated prior payload of the same installation.
@@ -654,7 +654,7 @@ def _public_errors(function):
 def install(executable: Path, registry=None, *, allowed_previous_executables=None) -> Result:
     """Register owned entries; never select or replace Windows defaults.
 
-    Automatic setup supplies an exact owner allowlist. Explicit Settings repair
+    Automatic setup supplies an exact owner allowlist. Explicit registration repair
     can deliberately move a registration to this copy by omitting the allowlist.
     Ownership is checked before recovering a pending transaction.
     """
@@ -679,7 +679,7 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
                                                 for owner in allowed) for data in snapshots):
                     raise RegistrationConflict(
                         "Explorer registration belongs to another Luma copy. It was left untouched. "
-                        "Use Register this copy / repair in Settings to move it deliberately.")
+                        "Continue using the registered copy; this copy will not replace its registration automatically.")
                 if document["version"] == 2:
                     adoption = next(change for change in document["changes"]
                                     if _address(change) == _APPLICATION_COMMAND)
@@ -779,7 +779,7 @@ def prepare_startup_registration(executable: Path, registry=None) -> Result:
             if not _owned_by_executable(data, exe):
                 raise RegistrationConflict(
                     "Explorer registration belongs to another Luma copy. "
-                    "Use Register this copy / repair in Settings if you want to switch.")
+                    "Continue using the registered copy; this copy will not replace its registration automatically.")
             if any(registry.read(e["key"], e["name"]) != _decoded_value(e["written"])
                    for e in data["entries"]):
                 raise RegistrationConflict(
@@ -819,7 +819,7 @@ def _uninstall_locked(registry) -> Result:
 
 @_public_errors
 def uninstall(registry=None) -> Result:
-    """Explicit Settings action; preserves third-party changes and defaults."""
+    """Explicit removal action; preserves third-party changes and defaults."""
     _runtime_guard()
     registry = registry if registry is not None else WinRegistry()
     with registry.locked():
@@ -888,7 +888,7 @@ def _is_luma_thumbnail_entry(entry) -> bool:
 
 @_public_errors
 def disable_thumbnails(registry=None) -> Result:
-    """Settings toggle-off: retain Luma's usable file-opening registrations.
+    """Explicit thumbnail removal: retain Luma's usable file-opening registrations.
 
     Keep Photo/third-party handlers. Remove only unchanged owned Luma thumbnail
     handlers and COM values. Retain ownership records for modified values so

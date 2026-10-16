@@ -2,12 +2,13 @@
 param(
     [string]$BundleDir = "dist/Luma",
     [string]$OutputDir = "artifacts",
-    [string]$IsccPath = ""
+    [string]$IsccPath = "",
+    [switch]$UiFontScaleTest
 )
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
-    throw "Build the Windows installer on Windows with Inno Setup 6.3 or newer."
+    throw "Build the Windows installer on Windows with Inno Setup 6.7 or newer."
 }
 $Root = Split-Path -Parent $PSScriptRoot
 Push-Location $Root
@@ -35,9 +36,9 @@ try {
         else { $IsccPath = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6/ISCC.exe" }
     }
     if (!(Test-Path -LiteralPath $IsccPath -PathType Leaf)) {
-        throw "Install Inno Setup 6.3+ from https://jrsoftware.org/isdl.php, then pass -IsccPath if needed. GitHub Windows runners normally include it."
+        throw "Install Inno Setup 6.7+ from https://jrsoftware.org/isdl.php, then pass -IsccPath if needed. GitHub Windows runners normally include it."
     }
-    # Luma.iss checks ISPP Ver against EncodeVer(6, 3, 0). ISCC.exe can report
+    # Luma.iss checks ISPP Ver against EncodeVer(6, 7, 0). ISCC.exe can report
     # FileVersion 0.0.0.0 even when the actual compiler engine is current.
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
     $Artifacts = (Resolve-Path -LiteralPath $OutputDir).Path
@@ -72,15 +73,21 @@ try {
     }
     $IntegrityLines += 'end;'
     [IO.File]::WriteAllText($IntegrityFile, ($IntegrityLines -join "`r`n"), [Text.UTF8Encoding]::new($false))
+    $UiTestRoot = [IO.Path]::GetFullPath((Join-Path $Root "build")) + [IO.Path]::DirectorySeparatorChar
+    if ($UiFontScaleTest -and !$Artifacts.StartsWith($UiTestRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "UI font-scale tests must use a separate -OutputDir under build, never release artifacts."
+    }
     $Arguments = @(
         "/DAppVersion=$Version", "/DPayloadId=$PayloadId", "/DBundleDir=$Bundle",
         "/DMetadataFile=$MetadataFile", "/DArtifactDir=$Artifacts",
         "/DIntegrityFile=$IntegrityFile",
         "/DAppIcon=$(Join-Path $Root 'luma/assets/icon.ico')", "packaging/windows/Luma.iss"
     )
+    if ($UiFontScaleTest) { $Arguments = @("/DLumaUiFontScaleTest=1") + $Arguments }
     & $IsccPath @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed." }
-    $Installer = Join-Path $Artifacts "Luma-$Version-windows-x64-setup.exe"
+    $Suffix = if ($UiFontScaleTest) { "ui-font-test" } else { "setup" }
+    $Installer = Join-Path $Artifacts "Luma-$Version-windows-x64-$Suffix.exe"
     if (!(Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "Expected installer was not produced." }
     $Sha256 = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
     $InstallerName = [IO.Path]::GetFileName($Installer)

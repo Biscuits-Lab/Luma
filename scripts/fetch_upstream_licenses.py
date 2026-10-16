@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refresh missing upstream notices from official, exact-version source trees.
 
-This downloads text only, never executes upstream code. The checked-in manifest
+This reads official source archives, extracts text notices/evidence, and never executes upstream code. The checked-in manifest
 records immutable source revisions, paths, URLs and SHA-256 hashes. This is a
 notice collection, NOT the corresponding source required by LGPL distribution.
 """
@@ -12,12 +12,39 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import posixpath
+import re
 import sys
 import time
 import tarfile
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
+QT_TRANSLATION_CATALOGS = ("qtbase_zh_CN", "qtbase_zh_TW")
+QT_TRANSLATION_EVIDENCE = (
+    "translations/CMakeLists.txt", "translations/README", "translations/split-qt-ts.pl",
+)
+
+
+def translation_metadata(content, tag: str) -> dict:
+    """Review the actual catalog declaration, independently of tool licenses."""
+    declaration = content("translations/CMakeLists.txt").decode("utf-8")
+    if not re.search(
+            r'qt_internal_add_sbom\(\s*Translations\s+TYPE\s+QT_TRANSLATIONS'
+            r'\s+QT_LICENSE_ID\s+"QT_COMMERCIAL_OR_BSD3"\s*\)', declaration):
+        raise RuntimeError("Qt translation catalog license declaration changed; review before distribution")
+    return {
+        "license_expression": "BSD-3-Clause",
+        "license_basis": "translations/CMakeLists.txt",
+        "qtbase_license_mapping": (
+            f"https://github.com/qt/qtbase/blob/{tag}/cmake/QtPublicSbomLicenseHelpers.cmake"
+        ),
+        "catalogs": {
+            name + ".qm": {
+                "source": f"translations/{name}.ts",
+                "source_sha256": hashlib.sha256(content(f"translations/{name}.ts")).hexdigest(),
+            } for name in QT_TRANSLATION_CATALOGS
+        },
+    }
 
 
 def fetch(url: str) -> bytes:
@@ -51,9 +78,13 @@ def collect_repo(repo: str, tag: str, destination: Path) -> dict:
             or (("3rdparty/" in p or "external/" in p) and PurePosixPath(p).name.lower().startswith(("license", "copying", "copyright", "notice")))
             or PurePosixPath(p).name.lower().startswith(("license", "copying", "copyright", "notice"))
         }
+        if repo == "qt/qttranslations":
+            paths.update(QT_TRANSLATION_EVIDENCE)
         if not paths:
             raise RuntimeError(f"No licenses discovered in {repo}@{tag}")
         def content(path):
+            if path not in members:
+                raise RuntimeError(f"Missing source/license evidence: {repo}/{path}")
             stream = archive.extractfile(members[path])
             if stream is None:
                 raise RuntimeError(f"Not a regular file: {path}")
@@ -81,8 +112,12 @@ def collect_repo(repo: str, tag: str, destination: Path) -> dict:
             result[path] = {"url": f"https://github.com/{repo}/blob/{tag}/{path}",
                             "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
         revision = archive.pax_headers.get("comment", tag)
-    return {"repository": f"https://github.com/{repo}", "tag": tag, "revision": revision,
-            "source_archive": archive_url, "source_archive_sha256": archive_hash, "files": result}
+        translations = translation_metadata(content, tag) if repo == "qt/qttranslations" else None
+    component = {"repository": f"https://github.com/{repo}", "tag": tag, "revision": revision,
+                 "source_archive": archive_url, "source_archive_sha256": archive_hash, "files": result}
+    if translations is not None:
+        component["translations"] = translations
+    return component
 
 
 def main() -> int:
@@ -95,6 +130,7 @@ def main() -> int:
     manifest = {"purpose": "Full upstream license texts and attributions; not complete corresponding source", "components": {}}
     for key, repo, version in [
         ("qtbase", "qt/qtbase", args.qt_version),
+        ("qttranslations", "qt/qttranslations", args.qt_version),
         ("pyside", "pyside/pyside-setup", args.qt_version),
         ("openexr", "AcademySoftwareFoundation/openexr", "3.5.2"),
         ("imath", "AcademySoftwareFoundation/Imath", "3.2.3"),

@@ -65,9 +65,11 @@ Offscreen tests can exercise logic and widgets; they do not certify native Windo
 
 Use the ellipsis menu at the upper left for Save As, Copy, Open, and Settings. Rotation and confirmed recycle-bin deletion have adjacent buttons. The compact Windows title bar keeps the filename centered. Information and the thumbnail filmstrip start hidden. The lower-left controls show the filmstrip toggle, compact format/dimensions/file-size details, and then the information toggle. The 34 px title bar shares the canvas’s neutral dark gray background; the 36 px bottom bar is slightly lighter, without dividing lines. Zoom and fullscreen controls are at the lower right.
 
+The interface follows the system display language: Simplified Chinese, Traditional Chinese, or English fallback. Settings, menus, tooltips, confirmations and errors are localized; filenames and original metadata are preserved. Restart Luma after changing the OS display language. See [language selection and UI verification](docs/LOCALIZATION.md).
+
 ## Explorer thumbnails
 
-The Windows installer prepares Luma-owned thumbnail handlers automatically. A packaged portable copy performs a safe background registration check on ordinary first launch. Choose Luma yourself in Windows Default Apps; no extra thumbnail checkbox is needed. Settings offers status and repair if a bundle moved or registration conflicts. Existing unrelated providers/default choices are preserved. See [supported limits and troubleshooting](docs/EXPLORER_THUMBNAILS.md). Source/development runs and headless worker/smoke modes never auto-register.
+The Windows installer prepares Luma-owned thumbnail handlers automatically. A packaged portable copy performs a safe background registration check on ordinary first launch. Choose Luma yourself in Windows Default Apps; no extra thumbnail checkbox is needed. Settings does not expose Windows integration controls. Keep a registered portable folder in its original location; installed copies use Setup for registration recovery. Existing unrelated providers/default choices are preserved. See [supported limits and troubleshooting](docs/EXPLORER_THUMBNAILS.md). Source/development runs and headless worker/smoke modes never auto-register.
 
 ## Keyboard shortcuts
 

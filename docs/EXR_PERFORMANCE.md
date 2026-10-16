@@ -21,7 +21,8 @@ in this repository or the generated benchmark corpus.
   foreground image. Same-image adjustments and idle prefetch preserve active data
 - Generate EXR thumbnails from a small center-sampled preview, rather than
   full-source float arrays. Dedicated EXR and executable-association routes agree
-- Show effective `.exr` and `.hdr` thumbnail associations separately in Settings
+- Keep effective `.exr` and `.hdr` thumbnail association diagnostics separate;
+  ordinary startup reports a setup failure without adding a Settings section
 
 The full viewer still retains every source pixel at float32 precision. There is
 no preview-to-full-image swap and no reduced-resolution Copy/Save As fallback.
@@ -76,6 +77,22 @@ pixels before tone mapping. Memory does not fall in every full-view case: the
 three-channel HALF/PIZ case rises from about 214 to 223 MiB due to thread/codec
 workspace. See [all samples and file hashes](benchmarks/exr-structured-2026-10-16.json).
 
+### Moderate-detail 8K-square texture
+
+A third fixture is an 8192 × 8192 HALF RGBA ZIP file with seeded perturbations,
+gradients and checker detail, totaling 66,395,479 bytes. It is synthetic; it does
+not contain or reconstruct the unavailable user image. The same file is rejected
+by 0.1.2's full-view and thumbnail pixel guards in every baseline process.
+
+Three fresh candidate processes with warm OS caches measured median full decode
+of 0.878 s and a 1.890 s decode/render/Qt pipeline. This excludes application
+startup, window creation, directory scanning and event-loop scheduling. Full
+pipeline peak RSS was about 1915 MiB. The 256 × 256 thumbnail pipeline took
+0.406 s with about 39.3 MiB peak RSS; frozen-worker startup and Shell IPC are not
+included. Independently regenerated HALF-quantized source and sample hashes
+match all six candidate results. These Linux measurements are not Windows
+Explorer latency claims. See [the exact recipe, hashes and every sample](benchmarks/exr-8k-moderate-2026-10-16.json).
+
 ## Thumbnail and format limits
 
 Flat HALF/FLOAT/UINT sources, ZIP/PIZ/DWAA, RGB/RGBA, named layers, luminance,
@@ -92,8 +109,9 @@ chunks may require decompressing pixels not retained in the preview. Center
 sampling trades fine-detail reconstruction for bounded memory; it is not an
 embedded preview and does not validate every unrequested pixel chunk.
 
-Generated large native cases cover six combinations across 4K, 8K, 8K square,
-16K panorama and 16K square. The Windows gate must check direct extraction,
+Generated large native cases cover six band combinations across 4K, 8K, 8K square,
+16K panorama and 16K square, plus the moderate-detail 8K-square ZIP fixture above.
+The Windows gate must check direct extraction,
 required Shell surrogate extraction and the Applications route, including color
 and alpha probes, without disabling isolation. The packaged viewer must also
 open a Unicode-named 8192-square FLOAT/ZIP image. Source hashes, installer

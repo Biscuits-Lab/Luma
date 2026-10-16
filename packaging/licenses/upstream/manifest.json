@@ -1181,6 +1181,70 @@
           "bytes": 54130
         }
       }
+    },
+    "qttranslations": {
+      "repository": "https://github.com/qt/qttranslations",
+      "tag": "v6.12.0",
+      "revision": "2811457ceff8f0c24a1c4d14f947a283a17239d0",
+      "source_archive": "https://codeload.github.com/qt/qttranslations/tar.gz/refs/tags/v6.12.0",
+      "source_archive_sha256": "8be0626ad9c84b09a64ab521e5049bbd009f1335c2283c996954736c7e71484d",
+      "files": {
+        "LICENSES/BSD-3-Clause.txt": {
+          "url": "https://github.com/qt/qttranslations/blob/v6.12.0/LICENSES/BSD-3-Clause.txt",
+          "sha256": "9f0490f18656c6f2435bd14f603ef0c96434d1825615363dce43abb42ed1dcce",
+          "bytes": 1469
+        },
+        "LICENSES/GPL-3.0-only.txt": {
+          "url": "https://github.com/qt/qttranslations/blob/v6.12.0/LICENSES/GPL-3.0-only.txt",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+          "bytes": 35147
+        },
+        "LICENSES/LicenseRef-Qt-Commercial.txt": {
+          "url": "https://github.com/qt/qttranslations/blob/v6.12.0/LICENSES/LicenseRef-Qt-Commercial.txt",
+          "sha256": "9b1f50aae6267f9d5e0ceb6775ee86450262c25ec7c0573e151fe5d3f18a4700",
+          "bytes": 462
+        },
+        "LICENSES/Qt-GPL-exception-1.0.txt": {
+          "url": "https://github.com/qt/qttranslations/blob/v6.12.0/LICENSES/Qt-GPL-exception-1.0.txt",
+          "sha256": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2",
+          "bytes": 965
+        },
+        "licenseRule.json": {
+          "url": "https://github.com/qt/qttranslations/blob/v6.12.0/licenseRule.json",
+          "sha256": "0087aedb53430fb236602d1965834ff1c902e905b672b759a22ce9665f8a836c",
+          "bytes": 2401
+        },
+        "translations/CMakeLists.txt": {
+          "url": "https://github.com/qt/qttranslations/blob/v6.12.0/translations/CMakeLists.txt",
+          "sha256": "1c464f57b5b8878b81972fdd4f6e56f3d9f4f8f074ef9396e7afbc9a6c35a2e4",
+          "bytes": 10804
+        },
+        "translations/README": {
+          "url": "https://github.com/qt/qttranslations/blob/v6.12.0/translations/README",
+          "sha256": "88c5f8175c2e137aeb39d5bc3fd28d7290f43c3ce591c4b5ec925675d7070407",
+          "bytes": 260
+        },
+        "translations/split-qt-ts.pl": {
+          "url": "https://github.com/qt/qttranslations/blob/v6.12.0/translations/split-qt-ts.pl",
+          "sha256": "4b1f232def51db4e97935871d68d43e33af2cfb5fe6afe4e59d012ad4c101f16",
+          "bytes": 1181
+        }
+      },
+      "translations": {
+        "license_expression": "BSD-3-Clause",
+        "license_basis": "translations/CMakeLists.txt",
+        "qtbase_license_mapping": "https://github.com/qt/qtbase/blob/v6.12.0/cmake/QtPublicSbomLicenseHelpers.cmake",
+        "catalogs": {
+          "qtbase_zh_CN.qm": {
+            "source": "translations/qtbase_zh_CN.ts",
+            "source_sha256": "e63a70eedd900438ec1c63877c525bcda5c8292803bf0e228995de09fb9ddeb7"
+          },
+          "qtbase_zh_TW.qm": {
+            "source": "translations/qtbase_zh_TW.ts",
+            "source_sha256": "0b4ffa974ced7836800680db328911b770f0732dec9d39850c482156cf99fc58"
+          }
+        }
+      }
     }
   }
 }

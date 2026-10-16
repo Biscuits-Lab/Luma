@@ -1,8 +1,8 @@
-; Compile through scripts/build_installer.ps1 using Inno Setup 6.3+.
+; Compile through scripts/build_installer.ps1 using Inno Setup 6.7+.
 ; Payload paths are immutable: never replace a DLL already mapped by Explorer.
 ; Check the compiler engine, not ISCC.exe's often-zero file version resource.
-#if Ver < EncodeVer(6, 3, 0)
-  #error Inno Setup 6.3 or newer is required
+#if Ver < EncodeVer(6, 7, 0)
+  #error Inno Setup 6.7 or newer is required
 #endif
 #ifndef AppVersion
   #error AppVersion is required
@@ -41,12 +41,22 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0
-WizardStyle=modern
+WizardStyle=modern dark hidebevels
+WizardBackColor=#222222
+WizardImageFile=
+WizardSmallImageFile=..\..\luma\assets\icon.png
+DisableWelcomePage=yes
+DisableDirPage=no
+DisableReadyPage=yes
 SetupIconFile={#AppIcon}
 UninstallDisplayIcon={app}\versions\{#PayloadId}\Luma.exe
 UninstallDisplayName=Luma
 OutputDir={#ArtifactDir}
+#ifdef LumaUiFontScaleTest
+OutputBaseFilename=Luma-{#AppVersion}-windows-x64-ui-font-test
+#else
 OutputBaseFilename=Luma-{#AppVersion}-windows-x64-setup
+#endif
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=no
@@ -54,13 +64,34 @@ RestartApplications=no
 AllowNoIcons=yes
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
+; Use the current Windows display language, not regional date/number formats.
+LanguageDetectionMethod=uilanguage
+ShowLanguageDialog=no
+UsePreviousLanguage=no
 UninstallLogging=yes
 UninstallLogMode=append
 
+[Languages]
+; English is the fallback for Windows UI languages not supplied below.
+Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "zhCN"; MessagesFile: "compiler:Default.isl,languages\ChineseSimplified.isl"
+Name: "zhTW"; MessagesFile: "compiler:Default.isl,languages\ChineseTraditional.isl,languages\ChineseTraditionalOverrides.isl"
+
+#ifdef LumaUiFontScaleTest
+; Compile-time-only stress build, never used for a release asset.
+[LangOptions]
+en.DialogFontSize=18
+zhCN.DialogFontSize=18
+zhTW.DialogFontSize=18
+#endif
+
+#include "languages\LumaMessages.iss"
+
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:DesktopShortcut}"; GroupDescription: "{cm:ShortcutsGroup}"; Flags: unchecked
 
 [Files]
+Source: "..\..\luma\assets\icon.png"; DestName: "luma-setup-icon.png"; Flags: dontcopy
 Source: "{#BundleDir}\*"; DestDir: "{app}\versions\{#PayloadId}"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist
 Source: "{#MetadataFile}"; DestDir: "{app}\versions\{#PayloadId}"; DestName: "luma-install.json"; Flags: ignoreversion onlyifdoesntexist
 
@@ -69,7 +100,7 @@ Name: "{autoprograms}\Luma"; Filename: "{app}\versions\{#PayloadId}\Luma.exe"; W
 Name: "{autodesktop}\Luma"; Filename: "{app}\versions\{#PayloadId}\Luma.exe"; WorkingDir: "{app}\versions\{#PayloadId}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\versions\{#PayloadId}\Luma.exe"; Description: "Launch Luma"; Flags: nowait postinstall skipifsilent unchecked; Check: ShellRegistrationSucceeded
+Filename: "{app}\versions\{#PayloadId}\Luma.exe"; Description: "{cm:LaunchLuma}"; Flags: nowait postinstall skipifsilent unchecked; Check: ShellRegistrationSucceeded
 
 ; No [Registry], [InstallDelete] or [UninstallDelete] entries: shell registration
 ; uses the application's journaled current-user helper; images/settings are never purged.
@@ -78,6 +109,7 @@ var
   ShellRegistrationComplete: Boolean;
   ShellRegistrationFailure: String;
 
+#include "LumaUI.iss"
 #include IntegrityFile
 
 function ShellRegistrationSucceeded: Boolean;
@@ -116,7 +148,7 @@ var
 begin
   Result := '';
   if HasReparseAncestor(ExpandConstant('{app}\versions\{#PayloadId}')) then begin
-    Result := 'Choose an installation path without symbolic links or junctions so Luma can safely identify its files during uninstall.';
+    Result := CustomMessage('UnsafeInstallPath');
     Exit;
   end;
   Manifest := TStringList.Create;
@@ -128,12 +160,11 @@ begin
       if FileExists(Path) then begin
         try
           if CompareText(GetSHA256OfFile(Path), Copy(Line, 1, 64)) <> 0 then begin
-            Result := 'An existing Luma package file has changed: ' + Path + #13#10 +
-              'Setup will not overwrite a possibly loaded or intentionally replaced file. Back it up and remove that changed file before retrying, or choose a different installation folder.';
+            Result := FmtMessage(CustomMessage('ChangedPayload'), [Path]);
             Exit;
           end;
         except
-          Result := 'Setup could not verify an existing Luma package file: ' + Path + #13#10 + 'Close Luma and retry.';
+          Result := FmtMessage(CustomMessage('CannotVerifyPayload'), [Path]);
           Exit;
         end;
       end;
@@ -145,11 +176,11 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  LayoutLumaWizard(CurPageID);
   if CurPageID <> wpFinished then Exit;
   if ShellRegistrationComplete then
     WizardForm.FinishedLabel.Caption :=
-      'Luma has been installed for your Windows account.' + #13#10#13#10 +
-      'Explorer thumbnail support and Open with integration are registered automatically. Select Luma in Windows Default apps to use it as your image viewer. Your default image application is unchanged.'
+      CustomMessage('InstallComplete')
   else
     WizardForm.FinishedLabel.Caption := ShellRegistrationFailure;
 end;
@@ -159,8 +190,7 @@ function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
 begin
   Result := MemoDirInfo + NewLine + NewLine + MemoGroupInfo + NewLine +
     MemoTasksInfo + NewLine + NewLine +
-    'Setup registers Luma thumbnail support and Open with entries for your Windows account. ' +
-    'Your current default applications and other thumbnail providers are preserved.';
+    CustomMessage('ReadyIntegration');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -179,8 +209,7 @@ begin
   if not ShellRegistrationComplete then begin
     { Keep every payload: an older DLL can still be mapped by Explorer. The
       registrar rolls back its own transaction; never delete files on failure. }
-    ShellRegistrationFailure := 'Luma files have been installed, but Explorer thumbnail registration could not be updated safely.' + #13#10#13#10 +
-      'Another Luma copy or a changed registration may still own these entries. Close Luma and retry Setup, or use Luma Settings to inspect and repair registration. Your default image application has not been changed.';
+    ShellRegistrationFailure := CustomMessage('RegistrationFailed');
     Log(ShellRegistrationFailure);
     SuppressibleMsgBox(ShellRegistrationFailure, mbError, MB_OK, IDOK);
   end;
@@ -248,14 +277,13 @@ begin
   if CurUninstallStep <> usUninstall then Exit;
   Exe := ExpandConstant('{app}\versions\{#PayloadId}\Luma.exe');
   if not FileExists(Exe) then
-    StopUninstall('Luma is incomplete. Reinstall this version, then retry uninstalling so its Explorer registration can be safely removed.');
+    StopUninstall(CustomMessage('UninstallIncomplete'));
   if not Exec(Exe, '--shell-unregister-if-owned', ExtractFileDir(Exe),
               SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    StopUninstall('Luma could not check its Explorer registration. Close Luma, reinstall if necessary, and retry uninstalling. No application files have been removed.');
+    StopUninstall(CustomMessage('UninstallCannotCheck'));
   if ResultCode <> 0 then
-    StopUninstall('Luma could not safely remove its Explorer registration. Open Luma Settings to inspect and repair registration, then retry uninstalling. No application files have been removed.');
+    StopUninstall(CustomMessage('UninstallCannotRemove'));
   BusyFile := FirstBusyBinary(ExpandConstant('{app}\versions'));
   if BusyFile <> '' then
-    StopUninstall('Luma Explorer integration has been disabled where owned by this installation. A file is still in use or cannot be accessed:' + #13#10 + BusyFile + #13#10#13#10 +
-      'Close Luma and Explorer windows, then retry. If Windows still holds the thumbnail DLL, sign out and back in before retrying. Application files and settings have been kept.');
+    StopUninstall(FmtMessage(CustomMessage('UninstallBusy'), [BusyFile]));
 end;

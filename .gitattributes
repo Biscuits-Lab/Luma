@@ -1,2 +1,8 @@
 # Preserve exact upstream bytes: these files are verified against SHA-256 records.
 /packaging/licenses/upstream/** -text
+
+# Pinned Inno translations and license must keep their upstream byte encoding.
+/packaging/windows/languages/ChineseSimplified.isl -text
+/packaging/windows/languages/ChineseTraditional.isl -text
+/packaging/windows/languages/Reference-Default.isl -text
+/packaging/windows/languages/INNO-LICENSE.txt -text

@@ -21,6 +21,8 @@ from typing import BinaryIO, Callable
 import numpy as np
 from PIL import Image, ImageCms, UnidentifiedImageError
 
+from .photo_metadata import extract_exif_metadata, extract_exr_metadata, extract_raw_metadata
+
 
 # These ceilings are deliberately independent of compressed file size. They are
 # safety bounds, not a promise that every accepted file fits available system RAM.
@@ -88,6 +90,7 @@ class ImageData:
     metadata: dict[str, str] = field(default_factory=dict)
     channel_names: tuple[str, ...] = ('R', 'G', 'B', 'A')
     _pixel_limit: int | None = field(default=None, repr=False)
+    photo_metadata: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.path = Path(self.path)
@@ -242,6 +245,8 @@ def _decode_pillow(path: Path) -> ImageData:
             icc_bytes = source.info.get('icc_profile')
             if icc_bytes and len(icc_bytes) > MAX_ICC_BYTES:
                 raise ImageTooLargeError('Embedded ICC profile exceeds the 4 MiB safety limit.')
+            photo_metadata = {}
+            exif = None
             try:
                 exif = source.getexif()
                 for tag, title in ((271, 'Camera make'), (272, 'Camera model'),
@@ -253,6 +258,13 @@ def _decode_pillow(path: Path) -> ImageData:
             except (ValueError, TypeError, OSError, SyntaxError):
                 orientation = 1
                 _add_limitation(metadata, 'Malformed EXIF metadata could not be read')
+            if exif is not None:
+                try:
+                    photo_metadata = extract_exif_metadata(exif)
+                except (ValueError, TypeError, OSError, SyntaxError, OverflowError,
+                        ZeroDivisionError, struct.error, AttributeError):
+                    # Optional detail parsing cannot alter a valid orientation.
+                    pass
             # Capture orientation before loading; Pillow consumes TIFF orientation.
             # Handle other formats directly without parsing malformed EXIF again.
             operation = {
@@ -289,7 +301,7 @@ def _decode_pillow(path: Path) -> ImageData:
                     metadata['Color profile'] = 'High-bit-depth grayscale; assumed sRGB transfer'
                 if icc_bytes:
                     _add_limitation(metadata, 'Embedded ICC not applied to high-bit-depth grayscale')
-                return ImageData(path, pixels, linear, metadata)
+                return ImageData(path, pixels, linear, metadata, photo_metadata=photo_metadata)
 
             rgba = working.convert('RGBA')
             if icc_bytes:
@@ -311,7 +323,8 @@ def _decode_pillow(path: Path) -> ImageData:
             if ('16-bit' in depth or '32-bit' in depth) and working.mode in ('RGB', 'RGBA'):
                 _add_limitation(metadata, 'Pillow reduces this multichannel source to 8 bits per channel')
             metadata['Decoded depth'] = '8-bit RGBA'
-            return ImageData(path, np.array(rgba, dtype=np.uint8), False, metadata)
+            return ImageData(path, np.array(rgba, dtype=np.uint8), False, metadata,
+                             photo_metadata=photo_metadata)
 
 
 def _read_exact(stream: BinaryIO, count: int) -> bytes:
@@ -833,7 +846,8 @@ def _decode_exr(path: Path, *, cancelled: Callable[[], bool] | None = None,
         if preview_edge is not None:
             metadata['Source dimensions'] = f'{width:,} × {height:,}'
             metadata['Thumbnail'] = 'Bounded center-sampled selected-channel strips; no embedded preview'
-        return ImageData(path, pixels, True, metadata, _pixel_limit=MAX_EXR_PIXELS)
+        return ImageData(path, pixels, True, metadata, _pixel_limit=MAX_EXR_PIXELS,
+                         photo_metadata=extract_exr_metadata(header))
     finally:
         source.close()
 
@@ -902,7 +916,12 @@ def _decode_raw(path: Path) -> ImageData:
                 'Orientation': f'Camera orientation applied by LibRaw (flip {sizes.flip})',
                 'Limitations': 'Camera/model support depends on LibRaw; demosaic is 16-bit and clips out-of-range highlights; first RAW image only',
             }
-            return ImageData(path, pixels, True, metadata)
+            try:
+                photo_metadata = extract_raw_metadata(raw)
+            except rawpy.LibRawError:
+                # Optional camera metadata must not discard decoded pixels.
+                photo_metadata = {}
+            return ImageData(path, pixels, True, metadata, photo_metadata=photo_metadata)
     except rawpy.LibRawError as exc:
         raise DecodeError(
             f'LibRaw could not decode this RAW file: {_limited_text(exc, 240)}. '

@@ -34,17 +34,37 @@ jobs:
       - name: Verify installer and release-safety contracts
         shell: pwsh
         run: ./.venv-build/Scripts/python.exe -m pytest scripts/test_installer_contract.py scripts/test_release_gate.py -q
-      - name: Verify relative zoom at 200 percent scaling
+      - name: Verify localized controls and relative zoom at 200 percent scaling
         shell: pwsh
         run: |
           $env:QT_SCALE_FACTOR = "2"
           try {
-            ./.venv-build/Scripts/python.exe -m pytest tests/test_zoom_stability.py tests/test_native_corners.py -q
+            ./.venv-build/Scripts/python.exe -m pytest tests/test_zoom_stability.py tests/test_native_corners.py tests/test_chrome.py tests/test_footer_localization_layout.py tests/test_i18n.py tests/test_i18n_dialogs.py tests/test_settings_redesign.py tests/test_menu_widgets.py tests/test_startup_display.py tests/test_histogram.py tests/test_details_overlay.py tests/test_glass_backdrop.py -q
             if ($LASTEXITCODE -ne 0) { throw "High-DPI regression tests failed" }
           } finally { Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue }
       - name: Verify loaded-image drop regression sensitivity
         shell: pwsh
         run: ./.venv-build/Scripts/python.exe scripts/check_drop_regression.py
+      - name: Capture localized native Qt controls
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "windows"
+          try {
+            foreach ($language in @("en", "zh-CN", "zh-TW")) {
+              ./.venv-build/Scripts/python.exe -m scripts.render_ui_preview --language $language --output "build/ui-evidence/$language"
+              if ($LASTEXITCODE -ne 0) { throw "Localized UI capture failed: $language" }
+              ./.venv-build/Scripts/python.exe -m scripts.render_menu_preview --language $language --output "build/ui-evidence/$language/menus" --no-animation
+              if ($LASTEXITCODE -ne 0) { throw "Localized popup capture failed: $language" }
+              ./.venv-build/Scripts/python.exe -m scripts.render_details_preview --language $language --output "build/ui-evidence/$language/details"
+              if ($LASTEXITCODE -ne 0) { throw "Localized Details capture failed: $language" }
+            }
+            $env:QT_SCALE_FACTOR = "2"
+            ./.venv-build/Scripts/python.exe -m scripts.render_ui_preview --language zh-CN --output build/ui-evidence/zh-CN-200 --width 800
+            if ($LASTEXITCODE -ne 0) { throw "Scaled UI capture failed" }
+          } finally {
+            Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
+            Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          }
       - name: Smoke real bundled UI and decoders
         shell: pwsh
         run: ./.venv-build/Scripts/python.exe scripts/smoke_bundle.py dist/Luma/Luma.exe
@@ -62,6 +82,13 @@ jobs:
       - name: Build current-user Windows installer
         shell: pwsh
         run: ./scripts/build_installer.ps1
+      - name: Verify native installer layout and language controls
+        shell: pwsh
+        run: |
+          ./scripts/build_installer.ps1 -UiFontScaleTest -OutputDir build/installer-font-test
+          if ($LASTEXITCODE -ne 0) { throw "Installer font-metric stress build failed" }
+          ./.venv-build/Scripts/python.exe scripts/smoke_installer_ui.py --installer artifacts/Luma-0.1.3-windows-x64-setup.exe --scaled-installer build/installer-font-test/Luma-0.1.3-windows-x64-ui-font-test.exe
+          if ($LASTEXITCODE -ne 0) { throw "Native installer UI verification failed" }
       - name: Verify installer lifecycle on disposable runner
         shell: pwsh
         run: ./scripts/test_installer.ps1 -Installer artifacts/Luma-0.1.3-windows-x64-setup.exe
@@ -84,6 +111,8 @@ jobs:
           path: |
             build/*report*.json
             build/installer-smoke/**
+            build/installer-ui/**
+            build/ui-evidence/**
             build/thumbnail-artifacts/**
             build/thumbnail/Testing/Temporary/*
             build/Luma/warn-Luma.txt

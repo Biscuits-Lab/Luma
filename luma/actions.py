@@ -16,11 +16,13 @@ from PySide6.QtCore import QFile, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QVBoxLayout, QWidget,
 )
 
 from .decoders import RAW_EXTENSIONS
+from .i18n import tr, error_text, localize_buttons
+from .dialogs import PlainMessageBox as QMessageBox
 
 
 @dataclass(frozen=True)
@@ -59,24 +61,25 @@ def _same_source(destination: Path, source: Path) -> bool:
 def validated_destination(path: Path, source: Path, format: str) -> Path:
     """Validate the chosen path; only an absent extension is appended."""
     if format not in _FORMATS:
-        raise ValueError('Choose PNG, JPEG, TIFF or WebP for this display export.')
+        raise ValueError(tr('Choose PNG, JPEG, TIFF or WebP for this display export.'))
     destination = Path(path).expanduser().absolute()
     spec = _FORMATS[format]
     if not destination.suffix:
         destination = destination.with_suffix(spec.suffixes[0])
     elif destination.suffix.lower() not in spec.suffixes:
         raise ValueError(
-            f'The filename extension does not match {format}. '
-            f'Use {" or ".join(spec.suffixes)} or choose another format.'
+            tr('The filename extension does not match {format}. '
+               'Use {extensions} or choose another format.',
+               format=format, extensions=tr(' or ').join(spec.suffixes))
         )
     if _same_source(destination, source):
-        raise ValueError('The original source is protected. Choose a different filename.')
+        raise ValueError(tr('The original source is protected. Choose a different filename.'))
     if destination.is_symlink():
-        raise ValueError('Choose a regular destination file, not a symbolic link.')
+        raise ValueError(tr('Choose a regular destination file, not a symbolic link.'))
     if not destination.parent.is_dir():
-        raise ValueError('The destination folder does not exist. Choose an existing folder.')
+        raise ValueError(tr('The destination folder does not exist. Choose an existing folder.'))
     if destination.exists() and not destination.is_file():
-        raise ValueError('The destination must be a file, not a folder.')
+        raise ValueError(tr('The destination must be a file, not a folder.'))
     return destination
 
 
@@ -87,47 +90,48 @@ class ExportDialog(QDialog):
         super().__init__(parent)
         self.source = Path(source)
         self.choice: ExportChoice | None = None
-        self.setWindowTitle('Save As · displayed image')
+        self.setWindowTitle(tr('Save As · displayed image'))
         self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
         explanation = QLabel(
-            'Save a separate copy of the displayed image, including the current rotation, '
-            'channel and exposure. Every format below is 8-bit SDR. Source metadata is '
-            'stripped. Full-precision HDR, RAW and source-format export are not supported.'
+            tr('Save a separate copy of the displayed image, including the current rotation, '
+               'channel and exposure. Every format below is 8-bit SDR. Source metadata is '
+               'stripped. Full-precision HDR, RAW and source-format export are not supported.')
         )
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
         if linear or self.source.suffix.lower() in _HDR_EXTENSIONS:
             warning = QLabel(
-                'HDR / RAW: the displayed image has already been tone-mapped to 8-bit SDR. '
-                'This export cannot retain the original dynamic range or RAW sensor data.'
+                tr('HDR / RAW: the displayed image has already been tone-mapped to 8-bit SDR. '
+                   'This export cannot retain the original dynamic range or RAW sensor data.')
             )
             warning.setObjectName('exportHdrWarning')
             warning.setWordWrap(True)
             layout.addWidget(warning)
         form = QFormLayout()
         self.format_combo = QComboBox(objectName='exportFormat')
-        self.format_combo.addItem('Choose an output format…', None)
+        self.format_combo.addItem(tr('Choose an output format…'), None)
         for spec in EXPORT_FORMATS:
-            self.format_combo.addItem(spec.label, spec.key)
-        form.addRow('Format', self.format_combo)
+            self.format_combo.addItem(tr(spec.label), spec.key)
+        form.addRow(tr('Format'), self.format_combo)
         filename_row = QHBoxLayout()
         self.filename = QLineEdit(str(self.source.with_name(self.source.stem + '-display')))
         self.filename.setObjectName('exportFilename')
         filename_row.addWidget(self.filename)
-        browse = QPushButton('Folder…')
+        browse = QPushButton(tr('Folder…'))
         browse.clicked.connect(self._choose_folder)
         filename_row.addWidget(browse)
-        form.addRow('Save to', filename_row)
+        form.addRow(tr('Save to'), filename_row)
         layout.addLayout(form)
-        self.format_note = QLabel('Select a format to continue.')
+        self.format_note = QLabel(tr('Select a format to continue.'))
         self.format_note.setWordWrap(True)
         layout.addWidget(self.format_note)
-        self.acknowledge = QCheckBox('Export the displayed 8-bit SDR image; leave the source unchanged')
+        self.acknowledge = QCheckBox(tr('Export the displayed 8-bit SDR image; leave the source unchanged'))
         self.acknowledge.setObjectName('exportDisplayAcknowledged')
         layout.addWidget(self.acknowledge)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        self.buttons.button(QDialogButtonBox.StandardButton.Save).setText('Export displayed image')
+        localize_buttons(self.buttons)
+        self.buttons.button(QDialogButtonBox.StandardButton.Save).setText(tr('Export displayed image'))
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
         self.format_combo.currentIndexChanged.connect(self._format_changed)
@@ -137,7 +141,7 @@ class ExportDialog(QDialog):
 
     def _choose_folder(self):
         path = Path(self.filename.text()).expanduser()
-        directory = QFileDialog.getExistingDirectory(self, 'Choose export folder', str(path.parent))
+        directory = QFileDialog.getExistingDirectory(self, tr('Choose export folder'), str(path.parent))
         if directory:
             self.filename.setText(str(Path(directory) / path.name))
 
@@ -151,9 +155,9 @@ class ExportDialog(QDialog):
             if not path.suffix or path.suffix.lower() in known_suffixes:
                 self.filename.setText(str(path.with_suffix(spec.suffixes[0])))
             self.format_note.setText(
-                'JPEG uses lossy compression (quality 95). Transparent pixels are composited on white.'
+                tr('JPEG uses lossy compression (quality 95). Transparent pixels are composited on white.')
                 if key == 'JPEG' else
-                'Lossless compression of the displayed 8-bit pixels. Transparency is preserved.'
+                tr('Lossless compression of the displayed 8-bit pixels. Transparency is preserved.')
             )
         self._update_enabled()
 
@@ -168,10 +172,13 @@ class ExportDialog(QDialog):
             return
         try:
             if not self.filename.text().strip():
-                raise ValueError('Enter an output filename.')
+                raise ValueError(tr('Enter an output filename.'))
             destination = validated_destination(Path(self.filename.text()), self.source, key)
         except (OSError, ValueError, RuntimeError) as error:
-            QMessageBox.warning(self, 'Choose a different destination', str(error))
+            QMessageBox.warning(
+                self, tr('Choose a different destination'),
+                error_text('Choose another destination and try again.', error),
+            )
             return
         self.filename.setText(str(destination))
         self.choice = ExportChoice(destination, key)
@@ -188,7 +195,7 @@ def _file_signature(path: Path) -> tuple[int, int, int, int, int] | None:
 
 def _display_pixels(image: QImage) -> Image.Image:
     if image.isNull():
-        raise ValueError('There is no displayed image to export.')
+        raise ValueError(tr('There is no displayed image to export.'))
     rgba = image.convertToFormat(QImage.Format.Format_RGBA8888)
     # Construct from bytes, never from an external QImage buffer or source metadata.
     return Image.frombytes('RGBA', (rgba.width(), rgba.height()),
@@ -220,7 +227,7 @@ def _write_export(image: QImage, destination: Path, source: Path, format: str,
             os.fsync(stream.fileno())
         validated_destination(destination, source, format)
         if _file_signature(destination) != expected:
-            raise FileExistsError('The destination changed while exporting. Choose Save As again to review it.')
+            raise FileExistsError(tr('The destination changed while exporting. Choose Save As again to review it.'))
         if expected is None:
             # Atomic no-clobber publication. Unlike replace(), a file appearing
             # after the check cannot be silently overwritten without consent.
@@ -253,11 +260,12 @@ def save_displayed_image(parent: QWidget | None, image: QImage, source: Path,
         destination = validated_destination(choice.path, source, choice.format)
         if linear or source.suffix.lower() in _HDR_EXTENSIONS:
             answer = QMessageBox.warning(
-                parent, 'Confirm 8-bit SDR export',
-                f'Export the displayed image from “{source.name}” as {choice.format}?\n\n'
-                'HDR / RAW data has already been tone-mapped to 8-bit SDR. Original dynamic '
-                'range, RAW sensor data and source metadata will not be included. '
-                'This is not a full-precision export. The source file stays unchanged.',
+                parent, tr('Confirm 8-bit SDR export'),
+                tr('Export the displayed image from “{source}” as {format}?\n\n'
+                   'HDR / RAW data has already been tone-mapped to 8-bit SDR. Original dynamic '
+                   'range, RAW sensor data and source metadata will not be included. '
+                   'This is not a full-precision export. The source file stays unchanged.',
+                   source=source.name, format=choice.format),
                 QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
@@ -266,9 +274,10 @@ def save_displayed_image(parent: QWidget | None, image: QImage, source: Path,
         expected = _file_signature(destination)
         if expected is not None:
             answer = QMessageBox.question(
-                parent, 'Replace exported file?',
-                f'An output file already exists:\n{destination}\n\n'
-                'Replace it with this displayed 8-bit SDR image? This cannot be undone.',
+                parent, tr('Replace exported file?'),
+                tr('An output file already exists:\n{destination}\n\n'
+                   'Replace it with this displayed 8-bit SDR image? This cannot be undone.',
+                   destination=destination),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
@@ -276,7 +285,10 @@ def save_displayed_image(parent: QWidget | None, image: QImage, source: Path,
                 return None
         return _write_export(snapshot, destination, source, choice.format, expected)
     except (OSError, ValueError, RuntimeError) as error:
-        QMessageBox.critical(parent, 'Unable to export image', str(error))
+        QMessageBox.critical(
+            parent, tr('Unable to export image'),
+            error_text('The displayed image could not be exported. Check the destination and try again.', error),
+        )
         return None
 
 
@@ -293,13 +305,14 @@ def recycle_source(parent: QWidget | None, source: Path) -> bool:
     source = Path(source).absolute()
     try:
         if not source.is_file():
-            raise OSError('This source file no longer exists or is not a regular file.')
+            raise OSError(tr('This source file no longer exists or is not a regular file.'))
         if not QFile.supportsMoveToTrash():
-            raise OSError('The OS recycle bin is unavailable. Luma will not permanently delete files.')
+            raise OSError(tr('The OS recycle bin is unavailable. Luma will not permanently delete files.'))
         answer = QMessageBox.question(
-            parent, 'Move image to Recycle Bin?',
-            f'Move this original image to the system Recycle Bin / Trash?\n\n{source}\n\n'
-            'You can restore it using your operating system. Luma will not permanently delete it.',
+            parent, tr('Move image to Recycle Bin?'),
+            tr('Move this original image to the system Recycle Bin / Trash?\n\n{source}\n\n'
+               'You can restore it using your operating system. Luma will not permanently delete it.',
+               source=source),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -309,8 +322,12 @@ def recycle_source(parent: QWidget | None, source: Path) -> bool:
         # can be empty on Windows even when recycling succeeds.
         moved, _ = QFile.moveToTrash(source.as_posix())
         if not moved:
-            raise OSError('The OS could not move this file to its recycle bin. No permanent-delete fallback was used.')
+            raise OSError(tr('The OS could not move this file to its recycle bin. No permanent-delete fallback was used.'))
         return True
     except (OSError, RuntimeError) as error:
-        QMessageBox.critical(parent, 'Unable to recycle image', str(error))
+        QMessageBox.critical(
+            parent, tr('Unable to recycle image'),
+            error_text('The image could not be moved to the Recycle Bin. '
+                       'The source file has not been permanently deleted.', error),
+        )
         return False

@@ -337,12 +337,31 @@ def test_required_windows_smoke_wires_every_exr_case_and_pixel_probes():
     smoke = (root / "scripts/smoke_thumbnails.ps1").read_text()
     harness = (root / "native/thumbnail/thumbnail_tests.cpp").read_text()
     assert "files += prepare_exr_thumbnail_fixtures(destination)" in smoke
+    assert "moderate_exr_recipe = write_moderate_exr_fixture(moderate_exr)" in smoke
+    assert "files.append(moderate_exr)" in smoke
+    assert '"moderate_exr_recipe": moderate_exr_recipe' in smoke
     assert "write_exr_thumbnail_expectations(path, expected)" in smoke
     assert "Missing required EXR pixel expectations" in smoke
     assert 'foreach ($phase in @("direct", "surrogate"))' in smoke
     assert "application-surrogate" in smoke
     assert "LUMA_THUMBNAIL_EXPECTED" in smoke and "LUMA_THUMBNAIL_EXPECTED" in harness
     assert harness.count("TestExpectedBitmap(bitmap);") == 2
+
+
+def test_native_probe_readback_normalizes_row_order_and_tests_both_dib_layouts():
+    root = Path(__file__).resolve().parents[1]
+    harness = (root / "native/thumbnail/thumbnail_tests.cpp").read_text()
+    reader = harness.split("std::vector<BYTE> ReadTopDownBitmap", 1)[1].split("void TestBitmapReadback", 1)[0]
+    assert "GetDIBits(dc, bitmap" in reader
+    assert "info.bmiHeader.biHeight = -height" in reader
+    assert "dsBmih" not in reader and "bmBits" not in reader.replace("bmBitsPixel", "")
+    assert "const auto pixels = ReadTopDownBitmap(bitmap, width, height)" in harness
+    assert "for (const LONG signedHeight : {-height, height})" in harness
+    assert 'Require(actual == expected, "Bitmap readback changed orientation/color/alpha")' in harness
+    assert "        TestBitmapReadback();" in harness
+    # Keep real EXR probe checks strict; no tolerance inflation or y-mirror
+    # retry is permitted to make the former harness-only flip appear valid.
+    assert "if (difference < -2 || difference > 2)" in harness
 
 
 def test_native_thumbnail_resource_envelope_is_unchanged():

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import re
@@ -150,6 +150,7 @@ class RenderedFrame:
     linear: bool
     metadata: dict
     channel_names: tuple
+    photo_metadata: dict[str, str] = field(default_factory=dict)
 
     @property
     def nbytes(self):
@@ -260,7 +261,7 @@ class ImageService:
             if cancelled() or self._key(path) != key:
                 return None
             frame = RenderedFrame(rgba, data.width, data.height, data.linear,
-                                  data.metadata, data.channel_names)
+                                  data.metadata, data.channel_names, data.photo_metadata)
             self.render_cache.put(render_key, frame)
         if activate:
             # Active oversized images stay available for repeated exposure edits.
@@ -269,6 +270,7 @@ class ImageService:
             return None
         return dict(path=path, rgba=frame.rgba, width=frame.width, height=frame.height,
                     linear=frame.linear, metadata=frame.metadata,
+                    photo_metadata=frame.photo_metadata, render_key=render_key,
                     channel_names=frame.channel_names, cache_bytes=self.cache.bytes,
                     render_cache_bytes=self.render_cache.bytes)
 

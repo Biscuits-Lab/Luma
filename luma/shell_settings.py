@@ -1,12 +1,14 @@
-"""Read-only integration status and explicit repair for Settings."""
+"""Automatic Windows integration and reusable diagnostic controls."""
 from pathlib import Path
 import sys
 
 from PySide6.QtCore import Qt, QUrl, QObject, QEvent, Slot
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy
 
 from . import shell_integration as shell
+from .i18n import tr, error_text, localize_buttons
+from .dialogs import PlainMessageBox as QMessageBox
 
 _startup_registration_started = False
 _startup_registration_error = ""
@@ -58,10 +60,11 @@ class _StartupRegistration(QObject):
         if self.closed:
             return
         # A nonmodal notice does not replace image metadata or interrupt use.
-        notice = QMessageBox(QMessageBox.Icon.Warning, "Luma · Explorer thumbnails",
-                             "Explorer thumbnail setup could not finish. You can keep viewing images. "
-                             "Open Settings and use Register this copy / repair.\n\n" + error,
+        notice = QMessageBox(QMessageBox.Icon.Warning, tr("Luma · Explorer thumbnails"),
+                             error_text("Explorer thumbnail setup could not finish. You can keep viewing images; "
+                                        "see the technical details below. Your default image application has not been changed.", error),
                              QMessageBox.StandardButton.Ok, self.window)
+        localize_buttons(notice)
         notice.setTextFormat(Qt.TextFormat.PlainText)
         notice.setWindowModality(Qt.WindowModality.NonModal)
         notice.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -84,30 +87,45 @@ def start_automatic_registration(window):
 class ExplorerIntegrationPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        from .settings_widgets import DetailsPanel, SettingsRow, badge, plain_label, separator
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 12, 0, 0)
-        layout.setSpacing(9)
-        description = QLabel(
-            "Choose Luma in Windows Default Apps for the formats you want. Thumbnail "
-            "support is prepared automatically by the Windows app. Existing common-image "
-            "thumbnail providers are preserved. RAW thumbnails prefer embedded previews; "
-            "HDR / EXR thumbnails are tone-mapped SDR."
-        )
-        description.setWordWrap(True)
-        layout.addWidget(description)
-        self.status_label = QLabel()
-        self.status_label.setWordWrap(True)
-        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.status_label.setObjectName("explorer_status")
-        layout.addWidget(self.status_label)
-        row = QHBoxLayout()
-        self.repair = QPushButton("Register this copy / repair")
-        self.repair.setObjectName("repair_explorer")
-        self.defaults = QPushButton("Windows Default Apps")
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.defaults = QPushButton(tr("Windows Default Apps"))
         self.defaults.setObjectName("windows_default_apps")
-        row.addWidget(self.repair)
-        row.addWidget(self.defaults)
-        layout.addLayout(row)
+        self.defaults.setToolTip(tr("Choose which file formats Windows opens with Luma."))
+        layout.addWidget(SettingsRow(tr("Default image viewer"), self.defaults))
+        layout.addWidget(separator())
+        thumbnail_row = QHBoxLayout()
+        thumbnail_row.setSpacing(10)
+        labels_widget = QWidget()
+        labels = QVBoxLayout(labels_widget)
+        labels.setContentsMargins(0, 0, 0, 0)
+        labels.setSpacing(4)
+        labels.addWidget(plain_label(tr("Explorer thumbnails")))
+        self.status_badge = badge("")
+        labels.addWidget(self.status_badge)
+        thumbnail_row.addWidget(labels_widget, 1)
+        self.repair = QPushButton(tr("Register this copy / repair"))
+        self.repair.setObjectName("repair_explorer")
+        self.repair.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.repair.setToolTip(tr("Thumbnail support is prepared automatically. Repair only if needed."))
+        thumbnail_row.addWidget(self.repair, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(thumbnail_row)
+        self.details = DetailsPanel(tr("Integration details"))
+        self.status_label = plain_label("", wrap=True)
+        self.status_label.setObjectName("explorer_status")
+        self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.details.body.addWidget(self.status_label)
+        self.description = plain_label(
+            tr("Choose Luma in Windows Default Apps for the formats you want. Thumbnail "
+               "support is prepared automatically by the Windows app. Existing common-image "
+               "thumbnail providers are preserved. RAW thumbnails prefer embedded previews; "
+               "HDR / EXR thumbnails are tone-mapped SDR."), muted=True, wrap=True
+        )
+        self.details.body.addWidget(self.description)
+        layout.addWidget(self.details)
         self.repair.clicked.connect(self._repair_clicked)
         self.defaults.clicked.connect(self._open_defaults)
         self.refresh()
@@ -131,12 +149,42 @@ class ExplorerIntegrationPanel(QWidget):
             "recovery_required": "An interrupted registration needs recovery. Use Register this copy / repair.",
             "blocked": "Registration cannot be read safely. No changes were made.",
         }
-        message = messages.get(state.state, state.state)
+        message = tr(messages.get(state.state, "Could not determine the Explorer integration status."))
         if state.detail:
-            message += "\n" + state.detail
+            message += "\n\n" + tr("Technical details:") + "\n" + state.detail
         if _startup_registration_error and state.state != "installed":
-            message += "\nAutomatic setup: " + _startup_registration_error
+            message += "\n\n" + error_text("Automatic thumbnail setup did not finish. Use Register this copy / repair.", _startup_registration_error)
         self.status_label.setText(message)
+        states = {
+            "unavailable": "Windows app only",
+            "not_installed": "Setup needed",
+            "association_only": "Repair needed",
+            "installed": "Registered",
+            "stale": "Different location",
+            "modified": "Changes preserved",
+            "recovery_required": "Recovery needed",
+            "blocked": "Unable to read",
+        }
+        # Native status includes successful association checks as well as
+        # diagnostics. Only exact known success lines are safe to fold; new or
+        # unrecognized diagnostics remain visible without parsing user paths.
+        success_details = {f"Windows selects Luma's thumbnail handler for {extension}."
+                           for extension in (".hdr", ".exr")}
+        ordinary_associations = (state.state == "installed" and state.detail
+                                 and all(line in success_details for line in state.detail.splitlines()))
+        actionable_detail = bool(state.detail and state.state != "unavailable" and not ordinary_associations)
+        association_attention = state.state == "installed" and actionable_detail
+        self.status_badge.setText(tr("Check associations") if association_attention
+                                  else tr(states.get(state.state, "Status unavailable")))
+        self.status_badge.setToolTip(message)
+        level = "ready" if state.state == "installed" and not association_attention else ("neutral" if state.state == "unavailable" else "attention")
+        self.status_badge.setProperty("state", level)
+        self.status_badge.style().unpolish(self.status_badge)
+        self.status_badge.style().polish(self.status_badge)
+        # Diagnostics and failure/recovery guidance must not disappear behind a
+        # collapsed disclosure. Ordinary setup detail stays out of the main UI.
+        if actionable_detail or (_startup_registration_error and state.state != "installed") or state.state in ("blocked", "recovery_required", "modified"):
+            self.details.setExpanded(True)
 
     def _confirm(self):
         message = (
@@ -147,7 +195,7 @@ class ExplorerIntegrationPanel(QWidget):
             "Changes made by other apps are preserved."
         )
         return QMessageBox.question(
-            self, "Luma · Explorer integration", message,
+            self, tr("Luma · Explorer integration"), tr(message),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         ) == QMessageBox.StandardButton.Yes
@@ -167,8 +215,16 @@ class ExplorerIntegrationPanel(QWidget):
         finally:
             self.refresh()
         if error:
-            self.status_label.setText("Could not complete registration.\n" + error)
-            QMessageBox.warning(self, "Luma · Explorer integration", error)
+            message = error_text("Could not complete registration. "
+                                 "Use Register this copy / repair to try again.", error)
+            self.status_label.setText(message)
+            self.status_badge.setText(tr("Repair failed"))
+            self.status_badge.setToolTip(message)
+            self.status_badge.setProperty("state", "attention")
+            self.status_badge.style().unpolish(self.status_badge)
+            self.status_badge.style().polish(self.status_badge)
+            self.details.setExpanded(True)
+            QMessageBox.warning(self, tr("Luma · Explorer integration"), message)
 
     def _repair_clicked(self):
         self._apply()
@@ -176,4 +232,5 @@ class ExplorerIntegrationPanel(QWidget):
     def _open_defaults(self):
         if sys.platform == "win32":
             if not QDesktopServices.openUrl(QUrl("ms-settings:defaultapps")):
-                self.status_label.setText("Open Windows Settings → Apps → Default apps and choose Luma.")
+                self.status_label.setText(tr("Open Windows Settings → Apps → Default apps and choose Luma."))
+                self.details.setExpanded(True)

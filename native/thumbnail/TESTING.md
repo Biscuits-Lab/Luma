@@ -60,6 +60,21 @@ small HALF/FLOAT × ZIP/PIZ/DWAA × channel-layout matrix. This verifies synthet
 fixtures only; a private user sample and manual Explorer inspection remain
 separate validation steps.
 
+The native harness first runs an exact-byte bitmap-readback regression with
+both negative-height (top-down) and positive-height (bottom-up) 32-bit DIBs.
+Each row and alpha value differs. Readback always requests top-down output
+from `GetDIBits`; it never infers the source row order from the height returned
+by `GetObject`, which can discard the creation-height sign. This catches a
+harness-only vertical flip without accepting reversed EXR probes or relaxing
+color/alpha checks. The logs include both created and reported heights.
+
+The same three extraction routes also require a seeded moderate-detail
+8192-square HALF RGBA ZIP fixture (about 66 MB on the pinned Linux build).
+It is generated in 32-row strips by `scripts/generate_exr_moderate_fixture.py`;
+the fixture manifest records its exact runtime size, digest and recipe. Native
+pixel probes still apply, and neither the 256 MiB input limit nor the ten-second
+worker deadline is increased. Compressed bytes may differ across codec builds.
+
 The script refuses existing provider CLSID and Applications\\Luma.exe registrations.
 It registers only previously absent provider CLSIDs, that owned application key,
 and unique temporary file extensions under

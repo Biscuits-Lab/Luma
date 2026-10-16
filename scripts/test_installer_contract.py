@@ -1,5 +1,7 @@
 """Portable tests for the installer ownership boundary; no registry writes."""
+import hashlib
 import importlib.util
+import re
 import json
 from pathlib import Path
 import tempfile
@@ -14,6 +16,131 @@ spec.loader.exec_module(installer)
 smoke_spec = importlib.util.spec_from_file_location("smoke_installer_contract", MODULE.parents[1] / "scripts/smoke_installer.py")
 smoke = importlib.util.module_from_spec(smoke_spec)
 smoke_spec.loader.exec_module(smoke)
+
+
+def message_section(path, section):
+    result = {}
+    current = None
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            current = line
+        elif current == section and line and not line.startswith(";") and "=" in line:
+            key, value = line.split("=", 1)
+            if key in result:
+                raise AssertionError(f"Duplicate message: {path.name}: {key}")
+            result[key] = value
+    return result
+
+
+class InstallerLanguageTests(unittest.TestCase):
+    root = MODULE.parents[1]
+    languages = root / "packaging/windows/languages"
+
+    def test_pinned_upstream_files_keep_exact_bytes(self):
+        manifest = json.loads((self.languages / "UPSTREAM.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["commit"], "cfdf48923178df4b4f040e038b423aa555a61ffc")
+        attributes = (self.root / ".gitattributes").read_text(encoding="utf-8")
+        for name, entry in manifest["files"].items():
+            with self.subTest(name=name):
+                data = (self.languages / name).read_bytes()
+                self.assertEqual(len(data), entry["bytes"])
+                self.assertEqual(hashlib.sha256(data).hexdigest(), entry["sha256"])
+                self.assertIn("/packaging/windows/languages/" + name + " -text", attributes)
+                self.assertTrue(entry["url"].startswith("https://raw.githubusercontent.com/jrsoftware/issrc/" + manifest["commit"] + "/"))
+
+    def test_chinese_native_messages_cover_reference_and_placeholders(self):
+        expected = message_section(self.languages / "Reference-Default.isl", "[Messages]")
+        self.assertEqual(len(expected), 281)
+        for name in ("ChineseSimplified.isl", "ChineseTraditional.isl"):
+            actual = message_section(self.languages / name, "[Messages]")
+            if "Traditional" in name:
+                actual.update(message_section(self.languages / "ChineseTraditionalOverrides.isl", "[Messages]"))
+            with self.subTest(name=name):
+                self.assertFalse(set(expected) - set(actual))
+                for key, text in expected.items():
+                    self.assertEqual(sorted(re.findall(r"%[1-9]|\[[a-z/]+\]", text)),
+                                     sorted(re.findall(r"%[1-9]|\[[a-z/]+\]", actual[key])), key)
+
+    def test_custom_messages_complete_for_all_languages(self):
+        messages = message_section(self.languages / "LumaMessages.iss", "[CustomMessages]")
+        grouped = {lang: {k.split(".", 1)[1]: v for k, v in messages.items() if k.startswith(lang + ".")}
+                   for lang in ("en", "zhCN", "zhTW")}
+        self.assertEqual(len(grouped["en"]), 19)
+        for lang in ("zhCN", "zhTW"):
+            self.assertEqual(set(grouped[lang]), set(grouped["en"]))
+            for key, original in grouped["en"].items():
+                self.assertNotEqual(grouped[lang][key], original)
+                self.assertEqual(sorted(re.findall(r"%[1-9n]", original)),
+                                 sorted(re.findall(r"%[1-9n]", grouped[lang][key])), key)
+        script = (self.root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
+        script += (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
+        referenced = set(re.findall(r"CustomMessage\('([^']+)'\)", script))
+        referenced.update(re.findall(r"\{cm:([^},]+)", script))
+        self.assertEqual(referenced, set(grouped["en"]))
+
+    def test_setup_uses_current_windows_ui_language_and_english_fallback(self):
+        script = (self.root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
+        for directive in ("LanguageDetectionMethod=uilanguage", "ShowLanguageDialog=no", "UsePreviousLanguage=no"):
+            self.assertIn(directive, script)
+        languages = script.split("[Languages]", 1)[1].split("[Tasks]", 1)[0]
+        self.assertEqual(re.findall(r'Name: "([^"]+)";', languages), ["en", "zhCN", "zhTW"])
+        self.assertIn('languages\\ChineseTraditionalOverrides.isl', languages)
+        # Approved native dark design keeps the operating-system title bar.
+        self.assertIn("WizardStyle=modern dark hidebevels\n", script)
+        self.assertNotIn("includetitlebar", script)
+        for name, langid, codepage in (("ChineseSimplified.isl", "$0804", "936"),
+                                       ("ChineseTraditional.isl", "$0404", "950")):
+            options = {k.lower(): v for k, v in message_section(self.languages / name, "[LangOptions]").items()}
+            self.assertEqual(options["languageid"], langid)
+            self.assertEqual(options["languagecodepage"], codepage)
+
+    def test_custom_error_paths_keep_parameters_out_of_message_templates(self):
+        script = (self.root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
+        for key, variable in (("ChangedPayload", "Path"), ("CannotVerifyPayload", "Path"), ("UninstallBusy", "BusyFile")):
+            self.assertIn(f"FmtMessage(CustomMessage('{key}'), [{variable}])", script)
+        self.assertIn("CustomMessage('RegistrationFailed')", script)
+        self.assertIn("StopUninstall(CustomMessage('UninstallCannotRemove'))", script)
+
+
+    def test_native_design_preserves_engine_and_accessibility(self):
+        ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
+        script = (self.root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
+        self.assertIn("IsDarkInstallMode and not HighContrastActive", ui)
+        self.assertIn("LumaFooter.Color := $191919", ui)
+        self.assertIn("WizardBackColor=#222222", script)
+        self.assertIn("BodyHeight + ScaleY(12)", ui)
+        self.assertIn("ScaleX(112), ScaleY(36)", ui)
+        self.assertIn("ScaleX(82), ScaleY(36)", ui)
+        self.assertIn("ClientHeight - ScaleY(60)", ui)
+        self.assertIn("LumaFailureMemo.ScrollBars := ssVertical", ui)
+        for control in ("NextButton", "CancelButton", "DirBrowseButton"):
+            self.assertNotIn(control + ".OnClick :=", ui)
+        self.assertNotIn("BorderStyle := bsNone", ui)
+        self.assertNotIn("SuppressibleMsgBox", ui)
+        self.assertIn("LayoutLumaWizard(CurPageID)", script)
+        self.assertIn("DisableDirPage=no", script)
+
+    def test_compact_task_choice_preserves_native_silent_and_previous_defaults(self):
+        ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
+        self.assertIn("LumaDesktopTouched and not WizardSilent", ui)
+        self.assertIn("PageID = wpSelectTasks", ui)
+        self.assertIn("WizardSelectTasks('desktopicon')", ui)
+        self.assertIn("WizardSelectTasks('!desktopicon')", ui)
+        self.assertIn("'Inno Setup: Selected Tasks'", ui)
+        self.assertIn("'/TASKS='", ui)
+        self.assertIn("'/MERGETASKS='", ui)
+        self.assertNotIn("RegWrite", ui)
+        self.assertNotIn("RegDelete", ui)
+
+    def test_ui_font_stress_build_cannot_replace_release_output(self):
+        script = (self.root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
+        build = (self.root / "scripts/build_installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("#ifdef LumaUiFontScaleTest", script)
+        self.assertIn("en.DialogFontSize=18", script)
+        self.assertIn("$UiFontScaleTest -and !$Artifacts.StartsWith($UiTestRoot", build)
+        self.assertIn("windows-x64-ui-font-test", script)
+        self.assertIn("never release artifacts", build)
 
 
 class InstallerBoundaryTests(unittest.TestCase):
@@ -67,8 +194,8 @@ class InstallerBoundaryTests(unittest.TestCase):
         root = MODULE.parents[1]
         script = (root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
         build = (root / "scripts/build_installer.ps1").read_text(encoding="utf-8")
-        self.assertIn("#if Ver < EncodeVer(6, 3, 0)", script)
-        self.assertIn("#error Inno Setup 6.3 or newer is required", script)
+        self.assertIn("#if Ver < EncodeVer(6, 7, 0)", script)
+        self.assertIn("#error Inno Setup 6.7 or newer is required", script)
         self.assertNotIn(".VersionInfo.FileVersion", build)
 
     def test_registration_is_automatic_checked_and_has_no_thumbnail_task(self):

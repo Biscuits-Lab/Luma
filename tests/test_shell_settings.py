@@ -174,8 +174,11 @@ def test_close_during_registration_suppresses_late_error_dialog(qapp, monkeypatc
         window.close()
 
 
-def test_registration_failure_is_nonmodal_and_retained_for_settings(qapp, monkeypatch):
+@pytest.mark.parametrize('language', ('en', 'zh-CN', 'zh-TW'))
+def test_registration_failure_keeps_diagnostics_without_removed_settings_route(qapp, monkeypatch, language):
     from PySide6.QtWidgets import QWidget
+    from luma.i18n import set_language, tr
+    set_language(language)
     setup_automatic_registration(monkeypatch)
     def fail(path):
         raise settings.shell.ShellIntegrationError("Foreign provider preserved")
@@ -189,6 +192,9 @@ def test_registration_failure_is_nonmodal_and_retained_for_settings(qapp, monkey
         assert message.windowModality() == Qt.WindowModality.NonModal
         assert "Foreign provider preserved" in settings._startup_registration_error
         assert "Foreign provider preserved" in message.text()
+        assert tr("Explorer thumbnail setup could not finish. You can keep viewing images; "
+                  "see the technical details below. Your default image application has not been changed.") in message.text()
+        assert 'Open Settings' not in message.text()
         message.close()
     finally:
         window.close()

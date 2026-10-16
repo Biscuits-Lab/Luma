@@ -149,7 +149,7 @@ def test_footer_geometry_and_controls_stay_stable(qapp):
     window.stack.setCurrentWidget(window.canvas)
     qapp.processEvents()
     try:
-        controls = [window.status_label, window.info_button, window.fit_button,
+        controls = [window.metadata_group, window.fit_button,
                     window.zoom_combo, window.zoom_slider]
         initial = [control.geometry() for control in controls]
         for dimensions, text in [((32, 24), 'PNG | 32 × 24 | 99 B'),
@@ -163,9 +163,10 @@ def test_footer_geometry_and_controls_stay_stable(qapp):
             window.canvas.set_image(image(*dimensions))
             window.cancel_button.hide()
             qapp.processEvents()
-            assert window.zoom_combo.text() == '100%  ⌄'
+            assert window.zoom_combo.text() == '100%'
             assert window.zoom_slider.value() == 0
             assert window.status_label.toolTip() == text
+            assert 0 < window.info_button.x() - window.status_label.geometry().right() <= 8
             assert [control.geometry() for control in controls] == initial
         window.resize(800, 560)
         qapp.processEvents()
@@ -191,14 +192,14 @@ def test_toolbar_slider_and_explicit_pixel_action(qapp):
         assert seen == [200]
         window._zoom_preset(125)
         assert window.canvas.zoom_percent == 125  # Slider quantization cannot feed back.
-        assert window.zoom_combo.text() == '125%  ⌄'
+        assert window.zoom_combo.text() == '125%'
         pixel_action = next(action for action in window.zoom_combo.menu().actions()
                             if action.text().startswith('Actual pixels (1:1)'))
         pixel_action.trigger()
         assert window.canvas.transform().m11() * window.canvas.viewport().devicePixelRatioF() == pytest.approx(1)
         window._zoom_preset(100)
         assert window.canvas.fitted
-        assert window.zoom_combo.text() == '100%  ⌄'
+        assert window.zoom_combo.text() == '100%'
     finally:
         window.close()
 
@@ -228,7 +229,7 @@ def test_rapid_file_navigation_commits_only_fit_relative_100(qapp, tmp_path):
     try:
         window.open_path(paths[0])
         wait_for(lambda: window.displayed_path == paths[0] and len(window.files) == len(paths))
-        initial = [control.geometry() for control in (window.info_button, window.fit_button, window.zoom_combo)]
+        initial = [control.geometry() for control in (window.metadata_group, window.fit_button, window.zoom_combo)]
         for sequence in [(1, 2, 3), (2, 1, 0), (3, 0, 1)]:
             for index in sequence:
                 window.select_index(index)
@@ -238,9 +239,9 @@ def test_rapid_file_navigation_commits_only_fit_relative_100(qapp, tmp_path):
                 assert not window.delete_button.isEnabled()
             wait_for(lambda: window.displayed_path == paths[sequence[-1]])
             assert window.canvas.zoom_percent == 100
-            assert window.zoom_combo.text() == '100%  ⌄'
+            assert window.zoom_combo.text() == '100%'
             assert window.zoom_slider.value() == 0
-            assert [control.geometry() for control in (window.info_button, window.fit_button, window.zoom_combo)] == initial
+            assert [control.geometry() for control in (window.metadata_group, window.fit_button, window.zoom_combo)] == initial
         assert seen == [100.0]
     finally:
         window.close()

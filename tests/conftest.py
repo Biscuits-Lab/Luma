@@ -10,3 +10,12 @@ def qapp():
     app.setStyle('Fusion')
     app.setStyleSheet(STYLE)
     return app
+
+
+@pytest.fixture(autouse=True)
+def english_ui():
+    """Existing English assertions must not depend on the host display locale."""
+    from luma.i18n import set_language
+    set_language('en')
+    yield
+    set_language('en')

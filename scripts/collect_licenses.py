@@ -30,7 +30,7 @@ def collect(output: Path, allow_incomplete: bool = False) -> dict:
     failures = []
     manifest = {"python": platform.python_version(), "platform": platform.platform(), "packages": {}, "issues": failures}
     import rawpy
-    from PySide6.QtCore import qVersion
+    from PySide6.QtCore import QLibraryInfo, qVersion
     manifest["native_components"] = {"Qt": qVersion(), "LibRaw": ".".join(map(str, rawpy.libraw_version)), "rawpy_features": rawpy.flags}
     if qVersion() != distribution("PySide6_Essentials").version:
         failures.append("Qt runtime does not match the reviewed PySide source version")
@@ -83,7 +83,7 @@ def collect(output: Path, allow_incomplete: bool = False) -> dict:
             "project_urls": dist.metadata.get_all("Project-URL", []), "files": files,
         }
         if name in {"PySide6_Essentials", "shiboken6"}:
-            required = ("pyside", "qtbase") if name == "PySide6_Essentials" else ("pyside",)
+            required = ("pyside", "qtbase", "qttranslations") if name == "PySide6_Essentials" else ("pyside",)
             for key in required:
                 component = upstream_manifest.get("components", {}).get(key, {})
                 if component.get("tag") != f"v{dist.version}" or not component.get("files"):
@@ -92,6 +92,35 @@ def collect(output: Path, allow_incomplete: bool = False) -> dict:
         elif not files:
             failures.append(f"No full license texts found in installed {name} {dist.version}")
         manifest["packages"][name] = record
+
+    translation_component = upstream_manifest.get("components", {}).get("qttranslations", {})
+    for path in ("LICENSES/BSD-3-Clause.txt", "LICENSES/GPL-3.0-only.txt",
+                 "LICENSES/Qt-GPL-exception-1.0.txt", "translations/CMakeLists.txt",
+                 "translations/README", "translations/split-qt-ts.pl", "licenseRule.json"):
+        if path not in translation_component.get("files", {}):
+            failures.append(f"Missing Qt translation license/evidence text: {path}")
+    if (not re.fullmatch(r"[0-9a-f]{40}", translation_component.get("revision", ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", translation_component.get("source_archive_sha256", ""))):
+        failures.append("Missing pinned Qt translation source revision/archive hash")
+    translations = translation_component.get("translations", {})
+    if translations.get("license_expression") != "BSD-3-Clause":
+        failures.append("Qt translation catalog license review is missing or has changed")
+    translation_root = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath))
+    manifest["translation_catalogs"] = {}
+    for filename in ("qtbase_zh_CN.qm", "qtbase_zh_TW.qm"):
+        source = translations.get("catalogs", {}).get(filename, {})
+        binary = translation_root / filename
+        expected_source = "translations/" + filename.removesuffix(".qm") + ".ts"
+        if source.get("source") != expected_source or not re.fullmatch(r"[0-9a-f]{64}", source.get("source_sha256", "")):
+            failures.append(f"Missing source provenance for Qt translation catalog: {filename}")
+        if not binary.is_file():
+            failures.append(f"Missing Qt translation catalog: {filename}")
+            continue
+        manifest["translation_catalogs"][filename] = {
+            "qt_version": qVersion(), "sha256": digest(binary),
+            "source": source.get("source"), "source_sha256": source.get("source_sha256"),
+            "source_component": "qttranslations", "license_expression": translations.get("license_expression"),
+        }
 
     # An installed Python distribution normally has its full license locally.
     candidates = [Path(sys.base_prefix) / "LICENSE.txt", Path(sys.base_prefix) / "LICENSE", Path(sys.base_prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "LICENSE.txt"]

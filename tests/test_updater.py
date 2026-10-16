@@ -22,8 +22,23 @@ def zip_bytes(entries=None):
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
         for name, data in entries or [("Luma/Luma.exe", b"MZfake-executable"), ("Luma/_internal/runtime.dll", b"runtime")]:
-            bundle.writestr(name, data)
+            # ZipInfo normalizes Windows separators in its constructor. Preserve
+            # deliberately malformed names so security fixtures are identical
+            # on Windows and POSIX, rather than silently testing a safe path.
+            info = zipfile.ZipInfo(name)
+            info.filename = info.orig_filename = name
+            info.compress_type = zipfile.ZIP_DEFLATED
+            bundle.writestr(info, data)
     return buffer.getvalue()
+
+
+@pytest.mark.parametrize("name", ["Luma\\escape.exe", "Luma//file.dll", "Luma/./file.dll", "/absolute.exe"])
+def test_zip_fixture_preserves_untrusted_names(name):
+    payload = zip_bytes([(name, b"fixture")])
+    # The same raw name must appear in both the local and central ZIP headers.
+    assert payload.count(name.encode("utf-8")) == 2
+    with zipfile.ZipFile(BytesIO(payload)) as bundle:
+        assert bundle.infolist()[0].orig_filename == name
 
 
 def release_data(package=None):

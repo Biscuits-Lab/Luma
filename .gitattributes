@@ -1,0 +1,2 @@
+# Preserve exact upstream bytes: these files are verified against SHA-256 records.
+/packaging/licenses/upstream/** -text

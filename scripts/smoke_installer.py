@@ -29,11 +29,14 @@ def registered_uninstaller(command: str, install_root: Path) -> Path:
     """Resolve only the installer-owned executable named by its ARP entry.
 
     Inno may allocate unins001.exe on an immediate reinstall while the previous
-    unins000.exe is completing its asynchronous self-removal.
+    unins000.exe is completing its asynchronous self-removal. With
+    UninstallLogging=yes, Inno appends exactly " /LOG" to the quoted path
+    (issrc is-6_7_1, Projects/Src/Setup.Install.pas, lines 304-310).
+    Ignore only that suffix; never execute arguments taken from the registry.
     """
-    match = re.fullmatch(r'"([^"\r\n]+)"|([^"\r\n]+)', command)
+    match = re.fullmatch(r'"([^"\r\n]+)"(?: /LOG)?|([^"\r\n]+)', command)
     if match is None:
-        raise ValueError("Unexpected uninstall command")
+        raise ValueError(f"Unexpected uninstall command: {command!r}")
     executable = Path(match.group(1) or match.group(2)).resolve(strict=True)
     if (executable.parent != install_root.resolve(strict=True)
             or not re.fullmatch(r"unins[0-9]{3}\.exe", executable.name, re.IGNORECASE)

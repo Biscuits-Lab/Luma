@@ -38,7 +38,8 @@ class InstallerBoundaryTests(unittest.TestCase):
         for name in ("unins000.exe", "unins001.exe"):
             exe = self.root / name
             exe.write_bytes(b"test-only")
-            self.assertEqual(smoke.registered_uninstaller(f'"{exe}"', self.root), exe.resolve(strict=True))
+            for command in (f'"{exe}"', str(exe), f'"{exe}" /LOG'):
+                self.assertEqual(smoke.registered_uninstaller(command, self.root), exe.resolve(strict=True))
 
     def test_arp_uninstaller_refuses_other_paths_or_arguments(self):
         root = self.root / "installed"
@@ -53,6 +54,14 @@ class InstallerBoundaryTests(unittest.TestCase):
             smoke.registered_uninstaller(f'"{exe}"', root)
         with self.assertRaises(ValueError):
             smoke.registered_uninstaller(f'"{exe}" /arbitrary', root)
+
+    def test_arp_uninstaller_rejects_altered_or_injected_log_suffix(self):
+        exe = self.root / "unins001.exe"
+        exe.write_bytes(b"test-only")
+        for suffix in (" /LOG=other.log", " /LOG /SILENT", " /LOG & calc.exe",
+                       " /LOG\n", " /LOGGING", " /SILENT", " /LOG "):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                smoke.registered_uninstaller(f'"{exe}"{suffix}', self.root)
 
     def test_compiler_minimum_uses_inno_engine_version(self):
         root = MODULE.parents[1]

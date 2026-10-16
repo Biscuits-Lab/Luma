@@ -3,7 +3,8 @@
 Only an ephemeral GitHub-hosted Windows runner is allowed. The installer is
 created suspended and assigned to a private kill-on-close job before it runs;
 all window inspection/actions are restricted to that job's processes. The only
-UI actions are closing its wizard and confirming the localized cancellation.
+UI actions open/cancel its directory chooser, then close its wizard and confirm
+the localized cancellation. Installation is never started.
 
 Dependency: Pillow (already pinned in requirements.txt). Optional font-scaled
 compiler output is a layout stress test, not evidence of real high-DPI testing.
@@ -164,6 +165,8 @@ class Native:
             (self.u, "IsWindowEnabled", BOOL, [HANDLE]),
             (self.u, "IsChild", BOOL, [HANDLE, HANDLE]),
             (self.u, "GetDlgCtrlID", C.c_int, [HANDLE]),
+            (self.u, "GetParent", HANDLE, [HANDLE]),
+            (self.u, "GetWindowLongW", LONG, [HANDLE, C.c_int]),
             (self.u, "SetThreadDpiAwarenessContext", HANDLE, [HANDLE]),
             (self.u, "GetDpiForWindow", C.c_uint, [HANDLE]),
             (self.u, "GetDpiForSystem", C.c_uint, []),
@@ -255,7 +258,8 @@ class Native:
                 "text": self.text(window), "rect": self.rect(window),
                 "visible": bool(self.u.IsWindowVisible(window)),
                 "enabled": bool(self.u.IsWindowEnabled(window)),
-                "control_id": self.u.GetDlgCtrlID(window)}
+                "control_id": self.u.GetDlgCtrlID(window),
+                "parent": self.u.GetParent(window), "style": self.u.GetWindowLongW(window, -16)}
 
     def screenshot(self, window: int, output: Path) -> None:
         from PIL import Image
@@ -339,13 +343,66 @@ class InstallerJob:
             self.process = None
 
 
+def contains_rect(parent: list[int], child: list[int]) -> bool:
+    return (parent[0] <= child[0] < child[2] <= parent[2]
+            and parent[1] <= child[1] < child[3] <= parent[3])
+
+
+def verify_logo_background(path: Path, values: dict, window_rect: list[int], client_rect: list[int]) -> dict:
+    """Compare transparent PNG corners against the adjacent real wizard body."""
+    from PIL import Image
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+    x = client_rect[0] - window_rect[0] + values["logo_left"]
+    y = client_rect[1] - window_rect[1] + values["logo_top"]
+    width, height = values["logo_width"], values["logo_height"]
+    inset = max(1, min(width, height) // 30)
+    reference = image.getpixel((x - 4, y + inset))
+    corners = [image.getpixel((xx, yy)) for xx in (x + inset, x + width - 1 - inset)
+               for yy in (y + inset, y + height - 1 - inset)]
+    if any(max(abs(a - b) for a, b in zip(pixel, reference)) > 3 for pixel in corners):
+        raise AssertionError(f"Brand PNG has a rectangular backing: {corners} versus body {reference}")
+    return {"body_rgb": reference, "transparent_corner_rgb": corners, "passed": True}
+
+
+def browse_and_cancel(api: Native, job: InstallerJob, values: dict, translated: dict, output: Path) -> dict:
+    """Exercise the actual native browse callback, cancelling without path changes."""
+    window, button, edit = values["window"], values["browse"], values["directory"]
+    original = api.text(edit)
+    if not api.owned(button, job.job) or not api.u.IsChild(window, button):
+        raise AssertionError("Folder button is outside the owned wizard")
+    api.check(api.u.PostMessageW(button, BM_CLICK, 0, 0), "Activate owned folder button")
+    deadline, dialog = time.monotonic() + 10, None
+    while time.monotonic() < deadline:
+        candidates = [hwnd for hwnd in api.windows(job.job) if hwnd != window and api.u.IsWindowVisible(hwnd)
+                      and caption(api.text(hwnd)) == caption(translated["BrowseDialogTitle"])]
+        if len(candidates) == 1 and not api.u.IsWindowEnabled(window):
+            dialog = candidates[0]
+            break
+        time.sleep(0.05)
+    if dialog is None:
+        raise AssertionError("Folder icon did not open the native translated directory chooser")
+    api.screenshot(dialog, output)
+    api.check(api.u.PostMessageW(dialog, WM_CLOSE, 0, 0), "Cancel owned directory chooser")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if not api.u.IsWindowVisible(dialog) and api.u.IsWindowEnabled(window):
+            if api.text(edit) != original:
+                raise AssertionError("Cancelling the directory chooser changed the path")
+            return {"passed": True, "dialog_caption": translated["BrowseDialogTitle"],
+                    "path_unchanged": True, "screenshot": str(output)}
+        time.sleep(0.05)
+    raise TimeoutError("Owned directory chooser did not cancel")
+
+
 def verify_layout(api: Native, job: InstallerJob, values: dict, translated: dict, desktop_selected=False) -> dict:
     required = {"page", "footer", "button_height", "primary_width", "secondary_width",
-                "scale_x_100", "scale_y_100", "window", "directory", "desktop", "next", "cancel"}
+                "scale_x_100", "scale_y_100", "window", "directory", "desktop", "next", "cancel",
+                "browse", "directory_page", "logo_left", "logo_top", "logo_width", "logo_height"}
     if not required <= values.keys():
         raise AssertionError("LUMA_UI telemetry is missing fields: " + str(sorted(required - values.keys())))
     window = values["window"]
-    for key in ("window", "directory", "desktop", "next", "cancel"):
+    for key in ("window", "directory", "desktop", "next", "cancel", "browse", "directory_page"):
         handle = values[key]
         if not api.owned(handle, job.job) or not api.u.IsWindowVisible(handle):
             raise AssertionError(f"{key} is not a visible window owned by the installer job")
@@ -355,6 +412,21 @@ def verify_layout(api: Native, job: InstallerJob, values: dict, translated: dict
     by_handle = {item["hwnd"]: item for item in controls}
     next_button, cancel_button = by_handle[values["next"]], by_handle[values["cancel"]]
     desktop, directory = by_handle[values["desktop"]], by_handle[values["directory"]]
+    browse = by_handle[values["browse"]]
+    if browse["class"] != "TBitmapButton" or not browse["style"] & 0x10000:
+        raise AssertionError("Folder icon is not a keyboard-focusable native bitmap button")
+    if caption(browse["text"]) != caption(translated["ChangeLocation"]):
+        raise AssertionError("Folder icon lost its translated accessible name")
+    page_bounds = api.rect(values["directory_page"], client=True)
+    for item in (desktop, directory, browse):
+        if item["parent"] != values["directory_page"] or not contains_rect(page_bounds, item["rect"]):
+            raise AssertionError("Configuration control extends beyond its actual notebook page")
+    if directory["rect"][2] >= browse["rect"][0]:
+        raise AssertionError("Folder button overlaps the editable installation path")
+    for axis, size in (("x", browse["rect"][2] - browse["rect"][0]),
+                       ("y", browse["rect"][3] - browse["rect"][1])):
+        if abs(size - (38 * values[f"scale_{axis}_100"] + 50) // 100) > 1:
+            raise AssertionError("Folder button hit target does not scale with native metrics")
     primary_captions = {caption(translated[key]) for key in ("ButtonInstall", "ButtonNext", "UpdateAction") if key in translated}
     if caption(next_button["text"]) not in primary_captions:
         raise AssertionError("Primary button has the wrong language/caption")
@@ -404,7 +476,7 @@ def verify_layout(api: Native, job: InstallerJob, values: dict, translated: dict
     return {"metrics": values, "window": api.control(window), "client_rect": client,
             "window_dpi": api.u.GetDpiForWindow(window), "system_dpi": api.u.GetDpiForSystem(),
             "controls": controls, "footer_panels": footer_panels,
-            "translation_checks": ["primary", "cancel", "desktop"] + (["directory_label"] if directory_labels else [])}
+            "translation_checks": ["primary", "cancel", "desktop", "folder_accessible_name"] + (["directory_label"] if directory_labels else [])}
 
 
 def cancel(api: Native, job: InstallerJob, window: int, translated: dict, timeout=15) -> dict:
@@ -471,6 +543,10 @@ def run_case(api: Native, installer: Path, language: str, output: Path, work: Pa
                     time.sleep(0.3)
                     row.update(verify_layout(api, job, values, translated, desktop_selected))
                     api.screenshot(window, Path(row["screenshot"]))
+                    row["logo_background"] = verify_logo_background(Path(row["screenshot"]), values,
+                        row["window"]["rect"], row["client_rect"])
+                    row["directory_chooser"] = browse_and_cancel(api, job, values, translated,
+                        output / f"{name}-folder-dialog.png")
                     break
             time.sleep(0.1)
         else:
@@ -524,7 +600,7 @@ def main() -> int:
             json.dumps(row, indent=2, ensure_ascii=False), encoding="utf-8")
         return 0 if row["passed"] else 1
     report = {"passed": False, "cases": [], "capture": "PrintWindow of verified installer HWND only",
-              "safety": "No Install/Next clicks; private process job assigned before initial thread resumes",
+              "safety": "No Install/Next clicks; only owned directory chooser/cancellation; private job assigned before initial thread resumes",
               "dpi_scope": "Actual runner/window DPI is recorded. Font-scale stress is not OS DPI testing."}
     try:
         variants = [("native", args.installer)]

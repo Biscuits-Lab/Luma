@@ -98,6 +98,9 @@ def main() -> int:
     def install(package, name, expected=0):
         run([package, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
              f"/DIR={install_root}", "/TASKS=", f"/LOG={logs / (name + '.log')}"], name, expected)
+        raw = (logs / (name + ".log")).read_bytes()
+        text = raw.decode("utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig", errors="replace")
+        assert "Luma interactive registration repair result:" not in text, "Silent Setup invoked interactive owner repair"
 
     def assert_open_with_discovery(exe, name):
         # Fresh process avoids stale Shell caches after side-by-side upgrades.
@@ -175,7 +178,13 @@ def main() -> int:
         conflict_seeded = False
         checks.append("automatic registration conflict preserves foreign provider/defaults and reports setup exit 10")
 
-        install(installer, "install")
+        # Exercise real extraction progress within this already isolated lifecycle,
+        # rather than manufacturing a progress bar on the configuration page.
+        from smoke_installer_progress import install_with_progress
+        report["native_progress"] = install_with_progress(
+            [str(installer), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/TASKS=",
+             f"/DIR={install_root}", f"/LOG={logs / 'install.log'}"],
+            logs / "install.log", logs / "native-progress.json")
         assert read_value(winreg.HKEY_CURRENT_USER, ARP, "DisplayName")[0] == "Luma"
         assert read_value(winreg.HKEY_LOCAL_MACHINE, ARP, "DisplayName") is None
         assert shortcut.is_file() and not desktop.exists()
@@ -261,10 +270,27 @@ def main() -> int:
         assert journal() == portable_manifest and defaults() == before_defaults
         uninstall("uninstall-preserves-portable-owner")
         assert journal() == portable_manifest and defaults() == before_defaults
+        checks.append("automatic reinstall and uninstall preserve a different portable copy's registration")
+        # Preserve the existing foreign-owner assertions above, then test an
+        # explicit user's choice separately using the real packaged GUI helper.
+        install(installer, "install-for-confirmed-repair", expected=10)
+        assert journal() == portable_manifest and defaults() == before_defaults
+        managed, = payloads()
+        from smoke_registration_confirmation import exercise_confirmation
+        report["registration_confirmation"] = [exercise_confirmation(
+            managed / "Luma.exe", ROOT / "dist/Luma/Luma.exe",
+            logs / "registration-default-no.json", confirm=False)]
+        assert journal() == portable_manifest and defaults() == before_defaults
+        report["registration_confirmation"].append(exercise_confirmation(
+            managed / "Luma.exe", ROOT / "dist/Luma/Luma.exe",
+            logs / "registration-confirm-yes.json", confirm=True))
+        assert_owner(managed / "Luma.exe")
+        uninstall("uninstall-confirmed-repair")
+        assert journal() is None and defaults() == before_defaults
         with patch.object(shell, "_runtime_guard", return_value=None):
             shell.uninstall_if_executable(ROOT / "dist" / "Luma" / "Luma.exe")
         assert journal() is None
-        checks.append("automatic reinstall and uninstall preserve a different portable copy's registration")
+        checks.append("packaged confirmation shows exact owner paths; Return defaults to No without registry change; explicit Yes migrates owned entries; defaults unchanged and managed uninstall cleans up")
         report["passed"] = True
         return 0
     except Exception as error:

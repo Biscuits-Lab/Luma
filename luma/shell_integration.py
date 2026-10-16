@@ -107,6 +107,13 @@ class Status:
     thumbnails_enabled: bool = False
 
 
+@dataclass(frozen=True)
+class OwnedRegistration:
+    """Read-only confirmation snapshot; the exact receipt is checked on apply."""
+    executable: str
+    manifest: Value
+
+
 def _key(*parts: str) -> str:
     """Join fixed registry path fragments without empty components."""
     if not parts or any(
@@ -651,15 +658,19 @@ def _public_errors(function):
 
 
 @_public_errors
-def install(executable: Path, registry=None, *, allowed_previous_executables=None) -> Result:
+def install(executable: Path, registry=None, *, allowed_previous_executables=None,
+            expected_registration: OwnedRegistration | None = None) -> Result:
     """Register owned entries; never select or replace Windows defaults.
 
-    Automatic setup supplies an exact owner allowlist. Explicit registration repair
-    can deliberately move a registration to this copy by omitting the allowlist.
-    Ownership is checked before recovering a pending transaction.
+    Automatic setup supplies an exact owner allowlist. Confirmed cross-copy repair
+    also supplies the displayed ownership snapshot, checked under the same lock
+    before recovering a pending transaction or writing any registry values.
     """
     _runtime_guard()
     exe = _checked_executable(executable)
+    if (expected_registration is not None
+            and exe.casefold() != _windows_path(str(executable), "Luma.exe").casefold()):
+        raise RegistrationConflict("The confirmed installer executable path changed.")
     allowed = None
     if allowed_previous_executables is not None:
         allowed = {_windows_path(str(path), "Luma.exe").casefold()
@@ -669,6 +680,13 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
         allowed.add(exe.casefold())
     registry = registry if registry is not None else WinRegistry()
     with registry.locked():
+        if expected_registration is not None:
+            if (not isinstance(expected_registration, OwnedRegistration) or allowed is None
+                    or expected_registration.executable.casefold() not in allowed):
+                raise RegistrationConflict("Repair requires its exact confirmed owner allowlist.")
+            if _registration_owner_locked(registry) != expected_registration:
+                raise RegistrationConflict(
+                    "Explorer registration changed after confirmation. It was left untouched.")
         if allowed is not None:
             document, _ = _read_manifest(registry)
             if document is not None:
@@ -687,7 +705,17 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
                         raise RegistrationConflict(
                             "Interrupted registration refers to a prior payload outside the validated "
                             "installation. Its command was left untouched.")
-        base, raw, recovered = _recover(registry)
+        if expected_registration is None:
+            base, raw, recovered = _recover(registry)
+        else:
+            # A confirmed migration never recovers a journal introduced after
+            # the prompt. Keep the exact confirmed receipt as the transaction's
+            # compare-and-write precondition, even against non-cooperating apps.
+            document, raw = _read_manifest(registry)
+            if raw != expected_registration.manifest:
+                raise RegistrationConflict(
+                    "Explorer registration changed after confirmation. It was left untouched.")
+            base, recovered = document["data"], False
         handlers = {ext: registry.provider_for(ext) for ext in RASTER}
         old_entries = {_address(e): e for e in (base["entries"] if base else [])}
         for extension in RASTER:
@@ -836,6 +864,40 @@ def _owned_by_executable(data, executable: str) -> bool:
         e["written"]["data"].casefold() == desired[_address(e)].data.casefold()
         for e in paths
     )
+
+
+def _registration_owner_locked(registry) -> OwnedRegistration:
+    document, raw = _read_manifest(registry)
+    if document is None or document["state"] != "active":
+        raise RegistrationConflict("Repair requires an active Luma ownership manifest.")
+    data = document["data"]
+    owner = next((entry["written"]["data"].split('"')[1]
+                  for entry in data["entries"]
+                  if _path_role(_address(entry)) in {"command", "icon"}), None)
+    if owner is None:
+        raise RegistrationConflict("The existing Luma registration has no exact executable owner.")
+    owner = _windows_path(owner, "Luma.exe")
+    if not _owned_by_executable(data, owner):
+        raise RegistrationConflict("The existing Luma registration has inconsistent executable owners.")
+    if any(registry.read(*_address(entry)) != _decoded_value(entry["written"])
+           for entry in data["entries"]):
+        raise RegistrationConflict(
+            "Another app changed Luma's Explorer registration. Those changes were preserved.")
+    return OwnedRegistration(owner, raw)
+
+
+@_public_errors
+def registration_owner(registry=None) -> OwnedRegistration:
+    """Inspect an intact active receipt without recovery or filesystem access.
+
+    Every owned command, icon and DLL path must agree. The prior executable may
+    have been removed; it is never opened, run, resolved or required to exist.
+    """
+    if registry is None:
+        _runtime_guard()
+        registry = WinRegistry()
+    with registry.locked():
+        return _registration_owner_locked(registry)
 
 
 @_public_errors

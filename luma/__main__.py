@@ -16,6 +16,9 @@ def main(argv=None):
             return 0
         except (InstallerError, shell.ShellIntegrationError, OSError):
             return 2
+    if args == ["--shell-repair-registration"]:
+        from .registration_repair import main as repair_main
+        return repair_main()
     if args == ["--shell-unregister-if-owned"]:
         from pathlib import Path
         from . import shell_integration as shell

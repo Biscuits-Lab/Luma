@@ -3,10 +3,81 @@ var
   LumaLayoutActive: Boolean;
   LumaFooter: TPanel;
   LumaBrandIcon: TBitmapImage;
+  LumaBrowseButton: TBitmapButton;
   LumaBrandName, LumaBrandVersion: TNewStaticText;
   LumaDesktop: TNewCheckBox;
   LumaDesktopTouched: Boolean;
   LumaFailureMemo: TNewMemo;
+  LumaProgressDecorationDisabled: Boolean;
+  LumaProgressHandle: HWND;
+  LumaProgressStyleElements: TStyleElements;
+  LumaProgressWidth, LumaProgressHeight, LumaProgressBucket: Integer;
+
+function LumaSetWindowTheme(Window: HWND; SubAppName, SubIdList: String): Integer;
+  external 'SetWindowTheme@uxtheme.dll stdcall';
+function LumaCreateRoundRectRgn(Left, Top, Right, Bottom, EllipseWidth, EllipseHeight: Integer): THandle;
+  external 'CreateRoundRectRgn@gdi32.dll stdcall';
+function LumaSetWindowRgn(Window: HWND; Region: THandle; Redraw: BOOL): Integer;
+  external 'SetWindowRgn@user32.dll stdcall';
+function LumaDeleteObject(ObjectHandle: THandle): BOOL;
+  external 'DeleteObject@gdi32.dll stdcall';
+
+procedure StyleLumaProgress;
+var
+  Region: THandle;
+  Window: HWND;
+  Width, Height: Integer;
+begin
+  if not LumaLayoutActive or LumaProgressDecorationDisabled then Exit;
+  { Decorate the real engine-owned progress control. Min/Max/Position/State,
+    accessibility, status text and taskbar progress remain owned by Inno. }
+  Window := WizardForm.ProgressGauge.Handle;
+  Width := WizardForm.ProgressGauge.Width;
+  Height := WizardForm.ProgressGauge.Height;
+  if (Window = LumaProgressHandle) and (Width = LumaProgressWidth) and
+     (Height = LumaProgressHeight) then Exit;
+  LumaProgressHandle := Window;
+  LumaProgressWidth := Width;
+  LumaProgressHeight := Height;
+  { Nonempty Delphi strings containing NUL pass real empty UTF-16 strings.
+    Literal empty strings marshal to NULL, which would restore OS theming. }
+  if LumaSetWindowTheme(Window, #0, #0) <> 0 then begin
+    LumaProgressDecorationDisabled := True;
+    WizardForm.ProgressGauge.StyleElements := LumaProgressStyleElements;
+    Log('LUMA_PROGRESS native theme could not be customized; using native fallback');
+    Exit;
+  end;
+  SendMessage(Window, $0409, 0, $D0D0D0); { PBM_SETBARCOLOR }
+  SendMessage(Window, $2001, 0, $414141); { PBM_SETBKCOLOR }
+  Region := LumaCreateRoundRectRgn(0, 0, Width + 1, Height + 1, Height, Height);
+  if Region <> 0 then begin
+    if LumaSetWindowRgn(Window, Region, True) = 0 then begin
+      LumaDeleteObject(Region);
+      Log('LUMA_PROGRESS rounded clipping unavailable; using native rectangular fallback');
+    end;
+    { After success the window owns Region. Do not delete it. }
+  end;
+  LumaProgressHandle := Window;
+  LumaProgressWidth := Width;
+  LumaProgressHeight := Height;
+end;
+
+procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer);
+var
+  Bucket: Integer;
+begin
+  if not LumaLayoutActive then Exit;
+  StyleLumaProgress;
+  if MaxProgress > 0 then begin
+    Bucket := (Int64(CurProgress) * 20) div MaxProgress;
+    if Bucket <> LumaProgressBucket then begin
+      LumaProgressBucket := Bucket;
+      Log('LUMA_PROGRESS ' + Format('window=%d;gauge=%d;current=%d;maximum=%d;position=%d;minimum=%d;range=%d', [
+        WizardForm.Handle, WizardForm.ProgressGauge.Handle, CurProgress, MaxProgress,
+        WizardForm.ProgressGauge.Position, WizardForm.ProgressGauge.Min, WizardForm.ProgressGauge.Max]));
+    end;
+  end;
+end;
 
 function DesktopTaskValue(const Value: String; const DefaultValue: Boolean): Boolean;
 var
@@ -53,7 +124,7 @@ end;
 
 procedure LayoutLumaWizard(const PageID: Integer);
 var
-  BodyHeight, Width, Margin, ButtonTop: Integer;
+  BodyHeight, Width, Margin, ButtonTop, ContentWidth: Integer;
 begin
   if not LumaLayoutActive then Exit;
   Width := WizardForm.ClientWidth;
@@ -87,10 +158,24 @@ begin
   LumaBrandName.BringToFront;
   LumaBrandVersion.BringToFront;
   if PageID = wpSelectDir then begin
+    { Use the final page client, after Inno has resized its notebooks. Anchored
+      controls laid out before this point previously extended beyond the page. }
+    ContentWidth := WizardForm.SelectDirPage.ClientWidth;
+    WizardForm.SelectDirBrowseLabel.SetBounds(0, 0, ContentWidth, ScaleY(22));
+    WizardForm.DirEdit.SetBounds(0, ScaleY(31), ContentWidth - ScaleX(48), ScaleY(38));
+    LumaBrowseButton.SetBounds(ContentWidth - ScaleX(38), ScaleY(31), ScaleX(38), ScaleY(38));
+    LumaDesktop.SetBounds(0, ScaleY(85), ContentWidth, ScaleY(26));
     if WizardForm.PrevAppDir <> '' then
       WizardForm.NextButton.Caption := CustomMessage('UpdateAction')
     else
       WizardForm.NextButton.Caption := SetupMessage(msgButtonInstall);
+  end;
+  if PageID = wpInstalling then begin
+    ContentWidth := WizardForm.InstallingPage.ClientWidth;
+    WizardForm.StatusLabel.SetBounds(0, 0, ContentWidth, ScaleY(24));
+    WizardForm.ProgressGauge.SetBounds(0, ScaleY(40), ContentWidth, ScaleY(6));
+    WizardForm.FilenameLabel.SetBounds(0, ScaleY(62), ContentWidth, ScaleY(44));
+    StyleLumaProgress;
   end;
   if PageID = wpFinished then begin
     WizardForm.FinishedHeadingLabel.Caption := CustomMessage('CompleteHeading');
@@ -107,11 +192,38 @@ begin
     end;
   end;
   Log('LUMA_UI ' + Format(
-    'page=%d;footer=%d;button_height=%d;primary_width=%d;secondary_width=%d;scale_x_100=%d;scale_y_100=%d;window=%d;directory=%d;desktop=%d;next=%d;cancel=%d', [
+    'page=%d;footer=%d;button_height=%d;primary_width=%d;secondary_width=%d;scale_x_100=%d;scale_y_100=%d;window=%d;directory=%d;desktop=%d;next=%d;cancel=%d;browse=%d;directory_page=%d;logo_left=%d;logo_top=%d;logo_width=%d;logo_height=%d', [
      PageID, LumaFooter.Height, WizardForm.NextButton.Height, WizardForm.NextButton.Width,
      WizardForm.CancelButton.Width, ScaleX(100), ScaleY(100), WizardForm.Handle,
      WizardForm.DirEdit.Handle, LumaDesktop.Handle, WizardForm.NextButton.Handle,
-     WizardForm.CancelButton.Handle]));
+     WizardForm.CancelButton.Handle, LumaBrowseButton.Handle,
+     WizardForm.SelectDirPage.Handle, LumaBrandIcon.Left, LumaBrandIcon.Top,
+     LumaBrandIcon.Width, LumaBrandIcon.Height]));
+end;
+
+procedure DrawFolderGlyph;
+begin
+  { A small monochrome vector drawn at the native dialog scale. No font glyph
+    dependency, and no change to the approved Luma brand asset. }
+  LumaBrowseButton.Bitmap.Width := ScaleX(22);
+  LumaBrowseButton.Bitmap.Height := ScaleY(22);
+  with LumaBrowseButton.Bitmap.Canvas do begin
+    Brush.Color := $222222;
+    Pen.Color := $222222;
+    Rectangle(0, 0, ScaleX(22), ScaleY(22));
+    Pen.Color := $E6E6E6;
+    Pen.Width := ScaleX(1);
+    Brush.Style := bsClear;
+    MoveTo(ScaleX(2), ScaleY(18));
+    LineTo(ScaleX(2), ScaleY(5));
+    LineTo(ScaleX(8), ScaleY(5));
+    LineTo(ScaleX(10), ScaleY(8));
+    LineTo(ScaleX(20), ScaleY(8));
+    LineTo(ScaleX(20), ScaleY(18));
+    LineTo(ScaleX(2), ScaleY(18));
+    MoveTo(ScaleX(2), ScaleY(9));
+    LineTo(ScaleX(20), ScaleY(9));
+  end;
 end;
 
 procedure InitializeWizard;
@@ -150,6 +262,7 @@ begin
   LumaBrandIcon.Parent := WizardForm;
   LumaBrandIcon.SetBounds(Margin, ScaleY(31), ScaleX(66), ScaleY(66));
   LumaBrandIcon.Stretch := True;
+  LumaBrandIcon.BackColor := clNone;
   LumaBrandIcon.PngImage.LoadFromFile(ExpandConstant('{tmp}\luma-setup-icon.png'));
   LumaBrandName := TNewStaticText.Create(WizardForm);
   LumaBrandName.Parent := WizardForm;
@@ -172,18 +285,33 @@ begin
   WizardForm.SelectDirBrowseLabel.SetBounds(0, 0, Width - 2 * Margin, ScaleY(22));
   WizardForm.DirEdit.AutoSize := False;
   WizardForm.DirEdit.SetBounds(0, ScaleY(31), Width - 2 * Margin - ScaleX(114), ScaleY(38));
-  WizardForm.DirBrowseButton.Caption := CustomMessage('ChangeLocation');
-  WizardForm.DirBrowseButton.SetBounds(Width - 2 * Margin - ScaleX(104), ScaleY(31), ScaleX(104), ScaleY(38));
+  { TBitmapButton subclasses the native BUTTON class and retains keyboard
+    activation, focus and its accessible caption, without drawing text. }
+  LumaBrowseButton := TBitmapButton.Create(WizardForm);
+  LumaBrowseButton.Parent := WizardForm.SelectDirPage;
+  LumaBrowseButton.Caption := CustomMessage('ChangeLocation');
+  LumaBrowseButton.Hint := CustomMessage('ChangeLocation');
+  LumaBrowseButton.ShowHint := True;
+  LumaBrowseButton.TabStop := True;
+  LumaBrowseButton.TabOrder := WizardForm.DirBrowseButton.TabOrder;
+  LumaBrowseButton.BackColor := clNone;
+  LumaBrowseButton.OnClick := WizardForm.DirBrowseButton.OnClick;
+  DrawFolderGlyph;
+  WizardForm.DirBrowseButton.Visible := False;
+  WizardForm.DirBrowseButton.TabStop := False;
   LumaDesktop := TNewCheckBox.Create(WizardForm);
   LumaDesktop.Parent := WizardForm.SelectDirPage;
   LumaDesktop.Caption := CustomMessage('DesktopShortcut');
   LumaDesktop.SetBounds(0, ScaleY(85), Width - 2 * Margin, ScaleY(26));
   LumaDesktop.Checked := InitialDesktopTask;
   LumaDesktop.OnClick := @DesktopChoiceChanged;
-  LumaDesktop.TabOrder := WizardForm.DirBrowseButton.TabOrder + 1;
+  LumaDesktop.TabOrder := LumaBrowseButton.TabOrder + 1;
 
   WizardForm.StatusLabel.SetBounds(0, 0, Width - 2 * Margin, ScaleY(24));
+  LumaProgressStyleElements := WizardForm.ProgressGauge.StyleElements;
+  WizardForm.ProgressGauge.StyleElements := [];
   WizardForm.ProgressGauge.SetBounds(0, ScaleY(40), Width - 2 * Margin, ScaleY(6));
+  LumaProgressBucket := -1;
   WizardForm.FilenameLabel.SetBounds(0, ScaleY(62), Width - 2 * Margin, ScaleY(44));
   WizardForm.PreparingLabel.SetBounds(ScaleX(44), 0, Width - 2 * Margin - ScaleX(44), ScaleY(112));
   WizardForm.PreparingMemo.SetBounds(0, ScaleY(120), Width - 2 * Margin, ScaleY(108));

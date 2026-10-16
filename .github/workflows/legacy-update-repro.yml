@@ -1,0 +1,46 @@
+name: Historical 0.1.2 updater reproduction
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/legacy-update-repro.yml
+      - scripts/smoke_update_legacy.py
+      - scripts/test_update_legacy_contract.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  historical:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      LUMA_SHELL_TEST_REAL_REGISTRY: "1"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Install bounded screenshot dependency
+        shell: pwsh
+        run: python -m pip install Pillow==12.3.0
+      - name: Verify diagnostic safety contracts
+        shell: pwsh
+        run: python -m unittest discover -s scripts -p test_update_legacy_contract.py
+      - name: Exercise actual old frozen updater UI and relaunch
+        shell: pwsh
+        run: python scripts/smoke_update_legacy.py
+      - name: Save actual process and updater evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: luma-historical-update-diagnostics
+          path: build/update-legacy-012-013/**
+          if-no-files-found: error
+          retention-days: 14

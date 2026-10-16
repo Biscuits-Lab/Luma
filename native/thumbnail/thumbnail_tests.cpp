@@ -402,6 +402,10 @@ void TestMalformedStream(GetClassObject get, StreamKind kind,
 
 void TestRealHelper(GetClassObject get, const wchar_t* modeName,
                     const wchar_t* inputPath, bool expectAlpha) {
+    // Phase-only diagnostics let failed CI distinguish input staging from
+    // process startup/decoding without changing the ten-second deadline.
+    Require(SetEnvironmentVariableW(L"LUMA_THUMBNAIL_DIAGNOSTICS", L"1") != 0,
+            "Cannot enable thumbnail phase diagnostics");
     const TestMode* selected = nullptr;
     for (const auto& mode : kModes) {
         if (std::wcscmp(mode.name, modeName) == 0) selected = &mode;
@@ -523,8 +527,13 @@ void TestFixtureProtocol(GetClassObject get) {
         std::cout << "fixture_rejected " << test.name << '\n';
     }
 
-    for (const char* scenario : {"valid", "valid-max", "read-only-pin"}) {
-        const std::string protocol = std::string(scenario) + "\n";
+    for (const char* scenario : {"valid", "valid-max", "read-only-pin", "buffered-input"}) {
+        std::string protocol = std::string(scenario) + "\n";
+        if (protocol == "buffered-input\n") {
+            protocol.resize(8 * 1024 * 1024);
+            for (std::size_t index = 0; index < protocol.size(); ++index)
+                protocol[index] = static_cast<char>(index % 251);
+        }
         const bool maximum = protocol == "valid-max\n";
         OwnedBitmap bitmap;
         WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;

@@ -24,6 +24,12 @@ Opening, browsing and display rotation do not change the original file. Copy/Sav
 - 双击 `打包.bat`：在 Windows 上测试并生成 `dist\Luma\Luma.exe`
 - 首次运行需要安装 64 位 Python 3.12，并联网下载依赖；不会安装到系统目录
 
+## 更新与旧版本迁移
+
+当前开发版修复了旧更新器仅解压另一份程序、原快捷方式仍指向旧版本的问题。安装版更新会校验官方 Setup，在原安装目录升级，并等待新版窗口确认真实进程路径和内置版本后再退出旧窗口。安装失败或无法确认启动时，旧窗口保持打开。
+
+已有 0.1.2 / 0.1.3 用户需要先从 [Releases](https://github.com/Biscuits-Lab/Luma/releases) 手动安装一次包含此修复的安装包；新包无法修改正在运行的旧更新器。免安装版暂时仅提供手动更新入口，请将 ZIP 解压到新文件夹并更新自己的快捷方式，避免覆盖运行中的文件。详见 [更新与回滚说明](docs/BUILDING.md#update-and-upgrade-policy)。开发候选版本不等于已经发布的 Release。
+
 ## Run from source
 
 Use 64-bit Python 3.12 or newer on a platform for which the pinned packages provide wheels. Python 3.12 is the baseline build interpreter. From this folder on Windows:

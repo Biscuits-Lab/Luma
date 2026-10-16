@@ -519,20 +519,18 @@ class ViewerWindow(QMainWindow):
         self.hdr_note.setStyleSheet('font-size: 10px; line-height: 150%;')
         side.addWidget(self.hdr_note)
         side.addWidget(button(tr('Reset display'), self.reset_display, tr('Reset exposure, tone map and channels')))
-        side.addSpacing(10)
-        side.addWidget(QLabel(tr('BACKGROUND'), objectName='section'))
-        self.background = QComboBox()
+        # Shared background state is controlled from Settings only.
+        self.background = QComboBox(self)
+        self.background.hide()
         for key in ('Graphite', 'Checkerboard', 'Black', 'White'):
             self.background.addItem(tr(key), key)
         self.background.currentIndexChanged.connect(self._background_changed)
-        side.addWidget(self.background)
         side.addSpacing(10)
         self.photo_metadata = PhotoMetadata()
         side.addWidget(self.photo_metadata)
         side.addWidget(QLabel(tr('DETAILS'), objectName='section'))
         self.details = MetadataTextBrowser()
         side.addWidget(self.details)
-        side.addWidget(button(tr('Keyboard shortcuts'), self.show_shortcuts))
         side.addStretch(1)
         self.sidebar.attach_glass()
         self.sidebar.hide()
@@ -1177,7 +1175,19 @@ def main(argv=None):
     parser.add_argument('path', nargs='?', help=tr('Image or folder to open'))
     parser.add_argument('--version', action='version', version=__version__)
     parser.add_argument('--smoke-test', action='store_true', help=tr('Run a bounded native-window/decode check and exit'))
+    parser.add_argument('--update-startup-port', type=int, help=argparse.SUPPRESS)
+    parser.add_argument('--update-startup-nonce', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if (args.update_startup_port is None) != (args.update_startup_nonce is None):
+        parser.error('Both update startup arguments are required together.')
+    if args.update_startup_port is not None:
+        from .update_probe import validate_startup_endpoint, LaunchError
+        try:
+            validate_startup_endpoint(args.update_startup_port, args.update_startup_nonce)
+        except LaunchError as error:
+            parser.error(str(error))
+        if args.smoke_test:
+            parser.error('Update startup confirmation cannot be combined with smoke testing.')
     app = QApplication.instance() or QApplication(sys.argv[:1])
     install_qt_translations(app)
     if args.smoke_test and getattr(sys, 'frozen', False) and not verify_packaged_qt_catalogs():
@@ -1192,6 +1202,10 @@ def main(argv=None):
     if args.smoke_test:
         from .startup_smoke import StartupPaintProbe
         smoke_probe = StartupPaintProbe(window)
+    if args.update_startup_port is not None:
+        from .update_startup import StartupAcknowledgment
+        window._update_startup_ack = StartupAcknowledgment(
+            window, args.update_startup_port, args.update_startup_nonce)
     window.show()
     if not args.smoke_test:
         from .shell_settings import start_automatic_registration

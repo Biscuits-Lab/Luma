@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <new>
@@ -95,6 +96,46 @@ DWORD RemainingMs(ULONGLONG deadline) {
         Fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
     return static_cast<DWORD>(deadline - now);
 }
+
+// Opt-in CI diagnostics contain only fixed phase names and elapsed time. They
+// neither create files nor inherit handles into the helper. Normal Explorer
+// requests have no diagnostic output or extra I/O.
+class RequestTrace {
+public:
+    RequestTrace() noexcept : started_(GetTickCount64()) {
+        wchar_t enabled[2]{};
+        enabled_ = GetEnvironmentVariableW(
+            L"LUMA_THUMBNAIL_DIAGNOSTICS", enabled, ARRAYSIZE(enabled)) == 1
+            && enabled[0] == L'1';
+    }
+    ~RequestTrace() { write("end"); }
+
+    void phase(const char* name) noexcept {
+        phase_ = name;
+        write("begin");
+    }
+
+private:
+    void write(const char* event) const noexcept {
+        if (!enabled_) return;
+        const DWORD savedError = GetLastError();
+        const HANDLE output = GetStdHandle(STD_ERROR_HANDLE);
+        if (output && output != INVALID_HANDLE_VALUE) {
+            char line[160]{};
+            const int count = std::snprintf(line, sizeof(line),
+                "thumbnail_phase event=%s phase=%s elapsed_ms=%llu\n",
+                event, phase_, GetTickCount64() - started_);
+            if (count > 0 && static_cast<std::size_t>(count) < sizeof(line)) {
+                DWORD written = 0;
+                WriteFile(output, line, static_cast<DWORD>(count), &written, nullptr);
+            }
+        }
+        SetLastError(savedError);
+    }
+    ULONGLONG started_;
+    const char* phase_ = "request";
+    bool enabled_ = false;
+};
 
 class Handle {
 public:
@@ -278,7 +319,10 @@ struct TempFiles {
 
     void makeInputReadOnly(ULONGLONG deadline) {
         CheckDeadline(deadline);
-        if (!FlushFileBuffers(inputHandle.get())) FailLastError();
+        // Synchronous WriteFile has already populated the coherent file cache.
+        // This disposable input needs reader visibility, not crash durability:
+        // FlushFileBuffers needlessly forces up to 256 MiB to physical storage
+        // and can consume the request deadline before the helper even starts.
 
         // LibRaw opens READ/share-READ. A retained writer would conflict.
         // Keep a no-delete read handle throughout the transition, so there is
@@ -435,7 +479,7 @@ struct ChildProcess {
 };
 
 void RunHelper(const Mode& mode, const TempFiles& files, UINT size,
-               ULONGLONG deadline) {
+               ULONGLONG deadline, RequestTrace& trace) {
     CheckDeadline(deadline);
 
     const std::wstring directory = ModuleDirectory();
@@ -480,6 +524,7 @@ void RunHelper(const Mode& mode, const TempFiles& files, UINT size,
     PROCESS_INFORMATION information{};
 
     CheckDeadline(deadline);
+    trace.phase("create_process");
     if (!CreateProcessW(
             executable.c_str(), command.data(), nullptr, nullptr, FALSE,
             CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, directory.c_str(),
@@ -499,6 +544,7 @@ void RunHelper(const Mode& mode, const TempFiles& files, UINT size,
     if (previousSuspendCount == static_cast<DWORD>(-1)) FailLastError();
     if (previousSuspendCount != 1) Fail(E_UNEXPECTED);
 
+    trace.phase("wait_helper");
     const DWORD waitResult =
         WaitForSingleObject(child.process.get(), RemainingMs(deadline));
     if (waitResult == WAIT_TIMEOUT)
@@ -657,15 +703,22 @@ public:
         try {
             const UINT size = std::max(1u, std::min(cx, 1024u));
             const ULONGLONG deadline = GetTickCount64() + kDeadlineMs;
+            RequestTrace trace;
 
             TempFiles files;
+            trace.phase("create_temp");
             files.create(mode_);
+            trace.phase("copy_stream");
             CopyStream(stream_, files.inputHandle.get(), deadline);
+            trace.phase("pin_input");
             files.makeInputReadOnly(deadline);
-            RunHelper(mode_, files, size, deadline);
+            trace.phase("prepare_helper");
+            RunHelper(mode_, files, size, deadline, trace);
 
+            trace.phase("read_bitmap");
             *bitmap = ReadBitmap(files.outputHandle.get(), size, deadline);
             *alpha = WTSAT_ARGB;
+            trace.phase("cleanup");
             return S_OK;
         } catch (const Failure& failure) {
             return failure.hr;

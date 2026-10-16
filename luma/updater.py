@@ -1,9 +1,10 @@
-"""Opt-in GitHub updates, verified and installed beside the existing portable app.
+"""Opt-in GitHub updates with mode-aware apply and verified GUI relaunch.
 
 Only this repository's stable releases are trusted. SHA256SUMS detects damaged or
 mismatched downloads; it is not a substitute for publisher code signing. No
-remote scripts, administrator rights, credentials, or in-place replacement are
-used. The previous copy remains available if a newly launched version fails.
+remote scripts or credentials are used. Managed updates use verified Setup in
+the original root, retaining previous immutable payloads. Portable updates are
+manual until their stable-entry replacement can be guaranteed safely.
 """
 from __future__ import annotations
 
@@ -35,6 +36,10 @@ from PySide6.QtWidgets import (
 )
 
 from .i18n import tr, error_text
+from .update_installation import (
+    InstallationError, ManagedUpdate, apply_verified_setup, detect_installation,
+)
+from .update_probe import LaunchAcknowledgment, LaunchError, launch_verified_update
 
 REPOSITORY = "Biscuits-Lab/Luma"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
@@ -123,10 +128,19 @@ class Release:
     url: str
     archive: ReleaseAsset | None
     checksums: ReleaseAsset | None
+    setup: ReleaseAsset | None = None
 
     @property
     def downloadable(self):
         return self.archive is not None and self.checksums is not None
+
+
+@dataclass(frozen=True)
+class PreparedSetup:
+    version: str
+    directory: Path
+    executable: Path
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -251,7 +265,9 @@ def parse_release(data: dict) -> Release:
     release_url = f"{RELEASES_URL}/tag/{quote(tag, safe='')}"
     if data.get("html_url") != release_url:
         raise UpdateError(tr("The release link did not belong to the official Luma repository."))
-    expected_names = {f"Luma-{version}-windows-x64.zip": MAX_DOWNLOAD_BYTES, "SHA256SUMS": MAX_MANIFEST_BYTES}
+    expected_names = {f"Luma-{version}-windows-x64.zip": MAX_DOWNLOAD_BYTES,
+                      f"Luma-{version}-windows-x64-setup.exe": MAX_DOWNLOAD_BYTES,
+                      "SHA256SUMS": MAX_MANIFEST_BYTES}
     assets = data.get("assets")
     if not isinstance(assets, list):
         raise UpdateError(tr("The release asset list is invalid."))
@@ -274,7 +290,7 @@ def parse_release(data: dict) -> Release:
         if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest)):
             raise UpdateError(tr("A release asset has an invalid SHA-256 digest."))
         selected[name] = ReleaseAsset(name, url, size, digest[7:].lower() if digest else None)
-    return Release(version, tag, release_url, selected.get(f"Luma-{version}-windows-x64.zip"), selected.get("SHA256SUMS"))
+    return Release(version, tag, release_url, selected.get(f"Luma-{version}-windows-x64.zip"), selected.get("SHA256SUMS"), selected.get(f"Luma-{version}-windows-x64-setup.exe"))
 
 
 def check_for_update(*, cancelled=lambda: False, opener=None) -> Release:
@@ -478,6 +494,59 @@ def install_release(release: Release, install_root: Path, *, cancelled=lambda: F
         raise UpdateError(error_text("The update could not be saved. Check disk space and folder permissions. Your existing copy is unchanged.", error)) from error
 
 
+def download_setup(release: Release, cache_root: Path, *, cancelled=lambda: False,
+                   progress=lambda done, total: None, status=lambda text: None,
+                   opener=None) -> PreparedSetup:
+    """Stage the official Setup; this function never executes downloaded bytes."""
+    setup, checksums = release.setup, release.checksums
+    if setup is None or checksums is None:
+        raise UpdateError(tr("This release does not have an installer and SHA256SUMS yet."))
+    if (str(Version.parse(release.tag)) != str(release.version) or release.version.prerelease
+            or setup.name != f"Luma-{release.version}-windows-x64-setup.exe"
+            or checksums.name != "SHA256SUMS"):
+        raise UpdateError(tr("This is not a supported stable Windows update."))
+    for asset, limit in ((setup, MAX_DOWNLOAD_BYTES), (checksums, MAX_MANIFEST_BYTES)):
+        validate_asset_url(asset.url, release.tag, asset.name)
+        if type(asset.size) is not int or not 0 < asset.size <= limit:
+            raise UpdateError(tr("A release asset exceeds the download safety limit."))
+    cache_root = Path(cache_root).absolute()
+    if any(p.is_symlink() or p.is_junction() for p in (cache_root, *cache_root.parents)):
+        raise UpdateError(tr("The update folder cannot be a symbolic link."))
+    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_root = cache_root.resolve(strict=True)
+    if shutil.disk_usage(cache_root).free < setup.size + 64 * 1024 * 1024:
+        raise UpdateError(tr("There is not enough free disk space to download this update."))
+    try:
+        with tempfile.TemporaryDirectory(prefix=".setup-staging-", dir=cache_root) as temp:
+            staging = Path(temp)
+            status(tr("Downloading checksums…"))
+            manifest = _fetch_bytes(checksums.url, MAX_MANIFEST_BYTES, expected_size=checksums.size,
+                                    allow_cdn=True, cancelled=cancelled, opener=opener)
+            expected = checksum_for(manifest, setup.name)
+            if checksums.digest and hashlib.sha256(manifest).hexdigest() != checksums.digest:
+                raise UpdateError(tr("The checksum manifest does not match GitHub's SHA-256 digest."))
+            if setup.digest and setup.digest != expected:
+                raise UpdateError(tr("The release checksums disagree. The update was not installed."))
+            package = staging / setup.name
+            status(tr("Downloading update…"))
+            with package.open("xb") as stream:
+                _transfer(setup.url, MAX_DOWNLOAD_BYTES, stream, expected_size=setup.size,
+                          allow_cdn=True, cancelled=cancelled, progress=progress, opener=opener)
+            status(tr("Verifying SHA-256…"))
+            verify_checksum(package, expected, cancelled=cancelled)
+            with package.open("rb") as stream:
+                if stream.read(2) != b"MZ":
+                    raise UpdateError(tr("The verified installer is not a Windows executable."))
+            _check_cancel(cancelled)
+            # Retain a uniquely named staging parent for an installer that can
+            # outlive its Settings dialog. Never remove it on uncertain exit.
+            destination = cache_root / ("Setup-" + str(release.version) + "-" + staging.name.removeprefix(".setup-staging-"))
+            staging.rename(destination)
+            return PreparedSetup(str(release.version), destination, destination / setup.name, expected)
+    except OSError as error:
+        raise UpdateError(error_text("The update could not be saved. Check disk space and folder permissions. Your existing copy is unchanged.", error)) from error
+
+
 class _UpdateSignals(QObject):
     completed = Signal(int, object)
     failed = Signal(int, str)
@@ -495,6 +564,7 @@ class UpdateDialog(QDialog):
         self.current_version = current_version
         self.release = None
         self.installed = None
+        self.installation = None
         self._serial = 0
         self._busy = False
         self._cancel = threading.Event()
@@ -607,20 +677,27 @@ class UpdateDialog(QDialog):
         cancelled, signals = self._cancel.is_set, self._signals
         self.check_button.setEnabled(False)
         self.download_button.setEnabled(False)
+        self.launch_button.setEnabled(False)
         self.close_button.setAccessibleName(tr("Cancel"))
         self.close_button.setToolTip(tr("Cancel"))
         self.progress_bar.setRange(0, 0)
         self.progress_bar.show()
 
+        def emit(signal, *values):
+            try:
+                signal.emit(serial, *values)
+            except RuntimeError:
+                pass  # Settings may close while native Setup is still running.
+
         def run():
             try:
-                result = function(cancelled, lambda done, total: signals.progress.emit(serial, done, total), lambda message: signals.status.emit(serial, message))
+                result = function(cancelled, lambda done, total: emit(signals.progress, done, total), lambda message: emit(signals.status, tr(message)))
                 if not cancelled():
-                    signals.completed.emit(serial, result)
+                    emit(signals.completed, result)
             except Exception as error:
                 if not cancelled():
                     try:
-                        signals.failed.emit(serial, str(error) if isinstance(error, UpdateError) else error_text("The update could not be completed. Your existing copy is unchanged.", error))
+                        emit(signals.failed, str(error) if isinstance(error, UpdateError) else error_text("The update could not be completed. Your current Luma stays open.", error))
                     except RuntimeError:
                         pass  # The dialog/application was closed during I/O.
 
@@ -637,15 +714,33 @@ class UpdateDialog(QDialog):
         self._start(lambda cancelled, progress, status: check_for_update(cancelled=cancelled))
 
     def download(self):
-        if self._busy or not self.release or not self.release.downloadable or sys.platform != "win32":
+        if self._busy or not self.release or sys.platform != "win32":
             return
         release = self.release
-        self._start(lambda cancelled, progress, status: install_release(release, default_install_root(), cancelled=cancelled, progress=progress, status=status))
+        try:
+            installation = detect_installation()
+        except InstallationError as error:
+            self.status_label.setText(error_text("The installation could not be verified. Please run Setup again in its original folder.", error))
+            return
+        self.installation = installation
+        if installation.mode == "managed":
+            def apply(cancelled, progress, status):
+                prepared = download_setup(release, default_install_root(), cancelled=cancelled,
+                                          progress=progress, status=status)
+                return apply_verified_setup(prepared.executable, prepared.sha256, prepared.version,
+                                            installation, cancelled=cancelled, status=status)
+            self._start(apply)
+        elif installation.mode == "portable":
+            self.download_button.hide()
+            self.status_label.setText(tr("Portable copies require a manual update. Download Setup to use managed updates, or extract the new ZIP into a new folder and update your shortcut. The current portable folder is unchanged."))
+        else:
+            self.status_label.setText(tr("Automatic installation requires a packaged Windows Luma. Download Setup from the release page."))
 
     def _finish(self):
         self._busy = False
         self.check_button.setEnabled(True)
         self.download_button.setEnabled(True)
+        self.launch_button.setEnabled(True)
         self.progress_bar.hide()
         self.close_button.setAccessibleName(tr("Close"))
         self.close_button.setToolTip(tr("Close"))
@@ -666,17 +761,35 @@ class UpdateDialog(QDialog):
                 self.status_label.setText(tr("You're up to date. Latest stable release: {version}", version=result.version))
             elif sys.platform != "win32":
                 self.status_label.setText(tr("Luma {version} is available.\nDownload and installation from this window require Windows x64.", version=result.version))
-            elif not result.downloadable:
-                self.status_label.setText(tr("Luma {version} is available.\nIts Windows ZIP or SHA256SUMS is not published yet. Please check again later.", version=result.version))
             else:
-                size = result.archive.size / (1024 * 1024)
-                self.status_label.setText(tr("Luma {version} is available ({size:.1f} MB).\nDownload and install will verify SHA-256 and install a separate copy in your local application-data folder. Your current copy stays available for rollback. The new version will run only when you click Launch.", version=result.version, size=size))
+                try:
+                    self.installation = detect_installation()
+                except InstallationError as error:
+                    self.status_label.setText(error_text("The installation could not be verified. Please run Setup again in its original folder.", error))
+                    return
+                if self.installation.mode not in ("managed", "portable"):
+                    self.status_label.setText(tr("Automatic installation requires a packaged Windows Luma. Download Setup from the release page."))
+                    return
+                if self.installation.mode == "portable":
+                    self.status_label.setText(tr("Portable copies require a manual update. Download Setup to use managed updates, or extract the new ZIP into a new folder and update your shortcut. The current portable folder is unchanged."))
+                    return
+                asset = result.setup
+                if asset is None or result.checksums is None:
+                    self.status_label.setText(tr("The package for this installation is not published yet. Please check again later."))
+                    return
+                size = asset.size / (1024 * 1024)
+                self.status_label.setText(tr("Luma {version} is available ({size:.1f} MB).\nAfter SHA-256 verification, Setup updates this installation and its shortcuts. Previous payloads remain available. Your current app stays open until the new version confirms startup.", version=result.version, size=size))
                 self.download_button.show()
-        elif isinstance(result, InstalledUpdate):
+        elif isinstance(result, ManagedUpdate):
             self.installed = result
             self.download_button.hide()
             self.launch_button.show()
-            self.status_label.setText(tr("Luma {version} is installed and ready to launch.\n{executable}\n\nYour previous copy and shortcuts are unchanged. Use the path above to open the new version later, or launch it now.", version=result.version, executable=result.executable))
+            self.status_label.setText(tr("Luma {version} is installed in your original installation.\n{executable}\nRestart to verify and open the new version.", version=result.version, executable=result.executable))
+        elif isinstance(result, LaunchAcknowledgment):
+            # A successful process creation or an installer exit is insufficient.
+            # This identity comes from the newly painted, running frozen app.
+            self.accept()
+            QApplication.instance().quit()
 
     def _failed(self, serial, message):
         if serial != self._serial or self._cancel.is_set():
@@ -696,28 +809,24 @@ class UpdateDialog(QDialog):
     def _status(self, serial, message):
         if serial == self._serial and not self._cancel.is_set():
             self.status_label.setText(message)
+            if message == tr("Setup is running in its own window. You can cancel there; your current Luma stays open."):
+                self.close_button.setAccessibleName(tr("Close"))
+                self.close_button.setToolTip(tr("Close settings. Setup continues in its own window."))
 
     def open_release(self):
         if self.release:
             QDesktopServices.openUrl(QUrl(self.release.url))
 
     def launch(self):
-        if not self.installed or self._busy or sys.platform != "win32":
+        if not isinstance(self.installed, ManagedUpdate) or self._busy or sys.platform != "win32":
             return
         executable = self.installed.executable
         if executable.is_symlink() or not executable.is_file() or not executable.resolve().is_relative_to(self.installed.directory.resolve()):
             self.status_label.setText(tr("The installed application is missing or was moved. Please install the update again."))
             return
-        try:
-            # List arguments and shell=False prevent paths from becoming commands.
-            environment = os.environ.copy()
-            environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-            subprocess.Popen([str(executable)], cwd=str(executable.parent), env=environment, shell=False, close_fds=True)
-        except OSError as error:
-            self.status_label.setText(error_text("The new version could not be launched. Your current Luma is still running; you can use it and try again later.", error))
-            return
-        self.accept()
-        QApplication.instance().quit()
+        self.status_label.setText(tr("Starting and verifying the new version…"))
+        self._start(lambda cancelled, progress, status: launch_verified_update(
+            executable, self.installed.version, cancelled=cancelled))
 
     def _cancel_work(self):
         self._cancel.set()

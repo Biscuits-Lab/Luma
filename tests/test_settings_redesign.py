@@ -271,14 +271,17 @@ def test_settings_header_reflows_for_large_native_font_metrics(qapp, monkeypatch
 def test_available_update_keeps_safety_explanation_visible(qapp, monkeypatch):
     window, dialog = open_settings(qapp, monkeypatch)
     monkeypatch.setattr(updater, 'sys', SimpleNamespace(platform='win32'))
+    from luma.update_installation import InstallationContext
+    monkeypatch.setattr(updater, 'detect_installation', lambda: InstallationContext('managed', Path('/test/Luma.exe'), Path('/test'), '0.1.3'))
     release = updater.Release(updater.Version.parse('0.1.4'), 'v0.1.4', updater.RELEASES_URL + '/tag/v0.1.4',
                               updater.ReleaseAsset('Luma-0.1.4-windows-x64.zip', 'unused', 2048),
-                              updater.ReleaseAsset('SHA256SUMS', 'unused', 128))
+                              updater.ReleaseAsset('SHA256SUMS', 'unused', 128),
+                              updater.ReleaseAsset('Luma-0.1.4-windows-x64-setup.exe', 'unused', 2048))
     try:
         dialog._completed(dialog._serial, release)
         qapp.processEvents()
         assert dialog.status_label.isVisible()
-        for phrase in ('SHA-256', 'separate copy', 'rollback', 'only when you click Launch'):
+        for phrase in ('SHA-256', 'this installation and its shortcuts', 'Previous payloads', 'confirms startup'):
             assert phrase in dialog.status_label.text()
         assert dialog.download_button.isVisible()
         assert dialog.update_details.content.isHidden()
@@ -484,9 +487,9 @@ def test_install_and_launch_failure_keep_real_status_visible(qapp, monkeypatch, 
     monkeypatch.setattr(updater, 'sys', SimpleNamespace(platform='win32'))
     executable = tmp_path / 'Luma.exe'
     executable.write_bytes(b'MZ synthetic test fixture')
-    installed = updater.InstalledUpdate('0.1.4', tmp_path, executable)
+    installed = updater.ManagedUpdate('0.1.4', tmp_path, executable, tmp_path / 'old.exe', tmp_path)
     launch = Mock(side_effect=OSError('Synthetic launch failure {details}'))
-    monkeypatch.setattr(updater.subprocess, 'Popen', launch)
+    monkeypatch.setattr(updater, 'launch_verified_update', launch)
     try:
         assert dialog.status_label.isHidden()
         dialog._completed(dialog._serial, installed)
@@ -495,6 +498,11 @@ def test_install_and_launch_failure_keep_real_status_visible(qapp, monkeypatch, 
         assert dialog.launch_button.isVisible()
         assert dialog.download_button.isHidden()
         dialog.launch_button.click()
+        for _ in range(100):
+            QTest.qWait(10)
+            if not dialog._busy:
+                break
+        assert not dialog._busy
         launch.assert_called_once()
         assert dialog.status_label.isVisible()
         assert 'Synthetic launch failure {details}' in dialog.status_label.text()

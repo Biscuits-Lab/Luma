@@ -6,6 +6,18 @@ format identifiers, release versions and third-party diagnostics stay verbatim.
 
 TRANSLATIONS = {
     "zh-CN": {
+        "Close settings. Setup continues in its own window.": "关闭设置。安装程序会在独立窗口继续运行。",
+        'This release does not have an installer and SHA256SUMS yet.': '此版本尚未发布安装包和 SHA256SUMS。',
+        'The verified installer is not a Windows executable.': '已校验的安装包不是 Windows 可执行文件。',
+        'The update could not be completed. Your current Luma stays open.': '更新未完成，当前 Luma 会保持打开。',
+        'The installation could not be verified. Please run Setup again in its original folder.': '无法验证当前安装，请在原安装目录重新运行安装程序。',
+        'Automatic installation requires a packaged Windows Luma. Download Setup from the release page.': '自动安装仅支持 Windows 打包版 Luma。请从发布页面下载安装包。',
+        'The package for this installation is not published yet. Please check again later.': '适用于当前安装的更新包尚未发布，请稍后重试。',
+        'Luma {version} is available ({size:.1f} MB).\nAfter SHA-256 verification, Setup updates this installation and its shortcuts. Previous payloads remain available. Your current app stays open until the new version confirms startup.': 'Luma {version} 可用（{size:.1f} MB）。\nSHA-256 校验通过后，安装程序会更新当前安装和快捷方式，并保留旧版文件。确认新版成功启动后，才会关闭当前窗口。',
+        'Luma {version} is installed in your original installation.\n{executable}\nRestart to verify and open the new version.': 'Luma {version} 已安装到原安装目录。\n{executable}\n重启以验证并打开新版。',
+        'Starting and verifying the new version…': '正在启动并验证新版…',
+        'Portable copies require a manual update. Download Setup to use managed updates, or extract the new ZIP into a new folder and update your shortcut. The current portable folder is unchanged.': '免安装版需要手动更新。下载安装包可使用应用内更新；或将新版 ZIP 解压到新文件夹，并更新快捷方式。当前免安装目录不会被修改。',
+        'Setup is running in its own window. You can cancel there; your current Luma stays open.': '安装程序正在独立窗口中运行，可在该窗口取消。当前 Luma 保持打开。',
         "Check associations": "请检查文件关联",
         "Updates are checked only on request.": "仅在点击时检查更新。",
         "Settings": "设置",
@@ -190,6 +202,18 @@ TRANSLATIONS = {
         "You're up to date. Latest stable release: {version}": "已是最新版本。最新稳定版：{version}"
     },
     "zh-TW": {
+        "Close settings. Setup continues in its own window.": "關閉設定。安裝程式會在獨立視窗繼續執行。",
+        'This release does not have an installer and SHA256SUMS yet.': '此版本尚未發佈安裝程式與 SHA256SUMS。',
+        'The verified installer is not a Windows executable.': '已驗證的安裝程式不是 Windows 可執行檔。',
+        'The update could not be completed. Your current Luma stays open.': '更新未完成，目前的 Luma 會保持開啟。',
+        'The installation could not be verified. Please run Setup again in its original folder.': '無法驗證目前的安裝，請在原安裝目錄重新執行安裝程式。',
+        'Automatic installation requires a packaged Windows Luma. Download Setup from the release page.': '自動安裝僅支援 Windows 打包版 Luma。請從發佈頁面下載安裝程式。',
+        'The package for this installation is not published yet. Please check again later.': '適用於目前安裝的更新套件尚未發佈，請稍後再試。',
+        'Luma {version} is available ({size:.1f} MB).\nAfter SHA-256 verification, Setup updates this installation and its shortcuts. Previous payloads remain available. Your current app stays open until the new version confirms startup.': 'Luma {version} 可用（{size:.1f} MB）。\nSHA-256 驗證通過後，安裝程式會更新目前的安裝與捷徑，並保留舊版檔案。確認新版成功啟動後，才會關閉目前視窗。',
+        'Luma {version} is installed in your original installation.\n{executable}\nRestart to verify and open the new version.': 'Luma {version} 已安裝到原安裝目錄。\n{executable}\n重新啟動以驗證並開啟新版。',
+        'Starting and verifying the new version…': '正在啟動並驗證新版…',
+        'Portable copies require a manual update. Download Setup to use managed updates, or extract the new ZIP into a new folder and update your shortcut. The current portable folder is unchanged.': '免安裝版需要手動更新。下載安裝程式即可使用應用程式內更新；或將新版 ZIP 解壓縮至新資料夾，並更新捷徑。目前的免安裝目錄不會被修改。',
+        'Setup is running in its own window. You can cancel there; your current Luma stays open.': '安裝程式正在獨立視窗中執行，可在該視窗取消。目前的 Luma 保持開啟。',
         "Check associations": "請檢查檔案關聯",
         "Updates are checked only on request.": "僅在點擊時檢查更新。",
         "Settings": "設定",

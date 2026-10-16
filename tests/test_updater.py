@@ -386,66 +386,124 @@ def test_non_windows_can_check_without_install(qapp, monkeypatch):
     qapp.processEvents()
 
 
-def test_windows_dialog_download_requires_click_then_separate_launch(qapp, tmp_path, monkeypatch):
-    release = updater.parse_release(release_data()[0])
-    executable = tmp_path / "Luma.exe"
-    executable.write_bytes(b"MZexe")
-    installed = updater.InstalledUpdate("0.1.1", tmp_path, executable)
-    install_calls = []
+def managed_fixture(tmp_path):
+    from luma.update_installation import InstallationContext, ManagedUpdate
+    old = tmp_path / "versions" / "old" / "Luma.exe"
+    new = tmp_path / "versions" / "new" / "Luma.exe"
+    for path in (old, new):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"MZexe")
+    return (InstallationContext("managed", old, tmp_path, "0.1.0"),
+            ManagedUpdate("0.1.1", new.parent, new, old, tmp_path))
+
+
+def setup_release_data():
+    data, archive, manifest = release_data()
+    setup = b"MZverified-test-setup"
+    name = "Luma-0.1.1-windows-x64-setup.exe"
+    digest = hashlib.sha256(setup).hexdigest()
+    manifest += f"{digest}  {name}\n".encode()
+    data["assets"][1]["size"] = len(manifest)
+    data["assets"].append({"name": name, "size": len(setup), "digest": "sha256:" + digest,
+                           "browser_download_url": "https://github.com/Biscuits-Lab/Luma/releases/download/v0.1.1/" + name})
+    return data, setup, manifest
+
+
+def test_windows_managed_download_uses_setup_original_root_then_waits_for_launch(qapp, tmp_path, monkeypatch):
+    release = updater.parse_release(setup_release_data()[0])
+    context, installed = managed_fixture(tmp_path)
+    calls = []
+    prepared = updater.PreparedSetup("0.1.1", tmp_path, tmp_path / release.setup.name, "a" * 64)
     monkeypatch.setattr(updater, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(updater, "detect_installation", lambda: context)
     monkeypatch.setattr(updater, "check_for_update", lambda **kwargs: release)
-    monkeypatch.setattr(updater, "install_release", lambda *args, **kwargs: install_calls.append(True) or installed)
-    monkeypatch.setattr(updater.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("launch needs another click"))
+    monkeypatch.setattr(updater, "download_setup", lambda *args, **kwargs: calls.append("download") or prepared)
+    def apply(path, checksum, version, installation, **kwargs):
+        assert (path, checksum, version, installation) == (prepared.executable, "a" * 64, "0.1.1", context)
+        assert threading.current_thread() is not threading.main_thread()
+        calls.append("apply")
+        return installed
+    monkeypatch.setattr(updater, "apply_verified_setup", apply)
+    monkeypatch.setattr(updater, "install_release", lambda *a, **k: pytest.fail("managed mode must not extract a separate copy"))
+    monkeypatch.setattr(updater, "launch_verified_update", lambda *a, **k: pytest.fail("launch requires a separate click"))
     parent = QWidget()
     dialog = updater.open_update_dialog(parent, "0.1.0")
     dialog.check()
     wait_for(qapp, lambda: not dialog._busy)
-    assert install_calls == []
+    assert calls == []
     assert not dialog.download_button.isHidden()
-    assert "separate copy" in dialog.status_label.text()
+    assert "updates this installation and its shortcuts" in dialog.status_label.text()
     dialog.download_button.click()
     wait_for(qapp, lambda: dialog.installed is not None)
-    assert install_calls == [True]
+    assert calls == ["download", "apply"]
     assert not dialog.launch_button.isHidden()
-    assert "previous copy and shortcuts are unchanged" in dialog.status_label.text()
+    assert "original installation" in dialog.status_label.text()
     dialog.reject()
     qapp.processEvents()
 
 
 def test_launch_failure_keeps_current_app_open(qapp, tmp_path, monkeypatch):
-    executable = tmp_path / "Luma.exe"
-    executable.write_bytes(b"MZexe")
+    context, installed = managed_fixture(tmp_path)
     parent = QWidget()
     dialog = updater.open_update_dialog(parent, "0.1.0")
-    dialog.installed = updater.InstalledUpdate("0.1.1", tmp_path, executable)
+    dialog.installed = installed
     monkeypatch.setattr(updater, "sys", SimpleNamespace(platform="win32"))
     def fail(*args, **kwargs):
-        raise OSError("cannot start")
-    monkeypatch.setattr(updater.subprocess, "Popen", fail)
+        raise updater.LaunchError("incorrect embedded version")
+    monkeypatch.setattr(updater, "launch_verified_update", fail)
     dialog.launch()
+    wait_for(qapp, lambda: not dialog._busy)
     assert dialog.isVisible()
-    assert "current Luma is still running" in dialog.status_label.text()
+    assert "current Luma stays open" in dialog.status_label.text()
+    assert "incorrect embedded version" in dialog.status_label.text()
     dialog.reject()
     qapp.processEvents()
 
 
-def test_launch_is_explicit_shell_free_and_resets_frozen_environment(qapp, tmp_path, monkeypatch):
-    executable = tmp_path / "Luma.exe"
-    executable.write_bytes(b"MZexe")
+def test_launch_does_not_quit_until_real_identity_acknowledged(qapp, tmp_path, monkeypatch):
+    context, installed = managed_fixture(tmp_path)
     parent = QWidget()
     dialog = updater.open_update_dialog(parent, "0.1.0")
-    dialog.installed = updater.InstalledUpdate("0.1.1", tmp_path, executable)
+    dialog.installed = installed
     monkeypatch.setattr(updater, "sys", SimpleNamespace(platform="win32"))
     launches, quits = [], []
-    monkeypatch.setattr(updater.subprocess, "Popen", lambda *args, **kwargs: launches.append((args, kwargs)))
+    started, allow_ack = threading.Event(), threading.Event()
+    def launch(executable, version, **kwargs):
+        launches.append((executable, version))
+        started.set()
+        assert allow_ack.wait(2)
+        return updater.LaunchAcknowledgment(version, executable, 42)
+    monkeypatch.setattr(updater, "launch_verified_update", launch)
     monkeypatch.setattr(updater, "QApplication", SimpleNamespace(instance=lambda: SimpleNamespace(quit=lambda: quits.append(True))))
     dialog.launch()
-    assert len(launches) == 1 and quits == [True]
-    args, kwargs = launches[0]
-    assert args == ([str(executable)],)
-    assert kwargs["cwd"] == str(tmp_path)
-    assert kwargs["shell"] is False
-    assert kwargs["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+    wait_for(qapp, started.is_set)
+    assert quits == [] and dialog.isVisible()
+    assert dialog._busy and not dialog.launch_button.isEnabled()
+    dialog.launch()
+    assert launches == [(installed.executable, "0.1.1")]
+    allow_ack.set()
+    wait_for(qapp, lambda: bool(quits))
+    assert quits == [True]
+    qapp.processEvents()
+
+
+def test_managed_setup_failure_never_claims_installed(qapp, tmp_path, monkeypatch):
+    context, installed = managed_fixture(tmp_path)
+    release = updater.parse_release(setup_release_data()[0])
+    monkeypatch.setattr(updater, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(updater, "detect_installation", lambda: context)
+    monkeypatch.setattr(updater, "download_setup", lambda *a, **k: updater.PreparedSetup("0.1.1", tmp_path, tmp_path/release.setup.name, "a"*64))
+    def fail(*a, **k):
+        raise updater.InstallationError("Setup exit10: registration conflict")
+    monkeypatch.setattr(updater, "apply_verified_setup", fail)
+    parent = QWidget()
+    dialog = updater.UpdateDialog(parent, "0.1.0")
+    dialog.release = release
+    dialog.download()
+    wait_for(qapp, lambda: not dialog._busy)
+    assert dialog.installed is None and dialog.launch_button.isHidden()
+    assert "registration conflict" in dialog.status_label.text()
+    dialog.reject()
     qapp.processEvents()
 
 
@@ -488,3 +546,62 @@ def test_malformed_asset_name_is_rejected():
     data["assets"][0]["name"] = ["invalid"]
     with pytest.raises(updater.UpdateError):
         updater.parse_release(data)
+
+
+def test_setup_download_verified_without_execution(tmp_path, monkeypatch):
+    data, setup, manifest = setup_release_data()
+    release = updater.parse_release(data)
+    opener = Opener({release.setup.url: setup, release.checksums.url: manifest})
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: pytest.fail("download never executes"))
+    prepared = updater.download_setup(release, tmp_path, opener=opener)
+    assert prepared.executable.name == release.setup.name
+    assert prepared.executable.read_bytes() == setup
+    assert prepared.sha256 == hashlib.sha256(setup).hexdigest()
+    assert list(tmp_path.iterdir()) == [prepared.directory]
+
+
+@pytest.mark.parametrize("fault", ["digest", "manifest", "mz", "size", "url", "duplicate"])
+def test_setup_download_rejects_bad_release_without_execution(tmp_path, fault):
+    data, setup, manifest = setup_release_data()
+    if fault == "digest":
+        data["assets"][-1]["digest"] = "sha256:" + "0" * 64
+    elif fault == "manifest":
+        manifest = manifest.replace(hashlib.sha256(setup).hexdigest().encode(), b"0" * 64)
+    elif fault == "mz":
+        setup = b"XX" + setup[2:]
+        digest = hashlib.sha256(setup).hexdigest()
+        manifest = manifest.splitlines()[0] + b"\n" + (digest + "  " + data["assets"][-1]["name"] + "\n").encode()
+        data["assets"][-1]["digest"] = "sha256:" + digest
+    elif fault == "size":
+        data["assets"][-1]["size"] += 1
+    elif fault == "url":
+        data["assets"][-1]["browser_download_url"] = "https://example.com/evil.exe"
+    elif fault == "duplicate":
+        data["assets"].append(dict(data["assets"][-1]))
+    with pytest.raises(updater.UpdateError):
+        release = updater.parse_release(data)
+        opener = Opener({release.setup.url: setup, release.checksums.url: manifest})
+        updater.download_setup(release, tmp_path, opener=opener)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_setup_cancel_cleans_uncommitted_download(tmp_path):
+    data, setup, manifest = setup_release_data()
+    release = updater.parse_release(data)
+    cancel = threading.Event()
+    with pytest.raises(updater.UpdateCancelled):
+        updater.download_setup(release, tmp_path, cancelled=cancel.is_set,
+            progress=lambda *args: cancel.set(),
+            opener=Opener({release.setup.url: setup, release.checksums.url: manifest}))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_native_setup_status_does_not_promise_close_cancels_installer(qapp):
+    parent = QWidget()
+    dialog = updater.open_update_dialog(parent, "0.1.3")
+    message = "Setup is running in its own window. You can cancel there; your current Luma stays open."
+    dialog._status(dialog._serial, message)
+    assert dialog.close_button.accessibleName() == "Close"
+    assert "Setup continues" in dialog.close_button.toolTip()
+    dialog.reject()
+    qapp.processEvents()

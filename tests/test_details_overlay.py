@@ -8,7 +8,7 @@ from PIL import Image
 from PySide6.QtCore import Qt, QPoint, QPointF
 from PySide6.QtGui import QImage, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from luma.app import ViewerWindow
 from luma.i18n import set_language, tr
@@ -220,3 +220,25 @@ def test_histogram_tracks_actual_tone_exposure_and_channels_without_redecode(qap
         assert decoded == [path]
     finally:
         window.close()
+
+
+@pytest.mark.parametrize('language', ['en', 'zh-CN', 'zh-TW'])
+def test_details_omits_background_and_shortcuts_but_preserves_state(qapp, language):
+    set_language(language)
+    window = ViewerWindow()
+    window.show()
+    try:
+        window.info_button.click()
+        qapp.processEvents()
+        assert not window.background.isVisible()
+        assert not window.sidebar.isAncestorOf(window.background)
+        assert tr('BACKGROUND') not in [label.text() for label in window.sidebar.findChildren(QLabel)]
+        assert tr('Keyboard shortcuts') not in [button.text() for button in window.sidebar.findChildren(QPushButton)]
+        window.background.setCurrentIndex(2)
+        assert window.canvas.background == 'Black'
+        assert window.histogram.parent() is not None
+        assert window.photo_metadata.parent() is not None
+        assert window.shortcuts
+    finally:
+        window.close()
+        set_language('en')

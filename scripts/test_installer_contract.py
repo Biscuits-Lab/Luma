@@ -19,6 +19,12 @@ smoke_spec.loader.exec_module(smoke)
 preflight_spec = importlib.util.spec_from_file_location("preflight_installer_contract", MODULE.parents[1] / "scripts/preflight_installer.py")
 preflight = importlib.util.module_from_spec(preflight_spec)
 preflight_spec.loader.exec_module(preflight)
+ui_spec = importlib.util.spec_from_file_location("smoke_installer_ui_contract", MODULE.parents[1] / "scripts/smoke_installer_ui.py")
+ui_smoke = importlib.util.module_from_spec(ui_spec)
+ui_spec.loader.exec_module(ui_smoke)
+progress_spec = importlib.util.spec_from_file_location("smoke_installer_progress_contract", MODULE.parents[1] / "scripts/smoke_installer_progress.py")
+progress_smoke = importlib.util.module_from_spec(progress_spec)
+progress_spec.loader.exec_module(progress_smoke)
 
 
 def message_section(path, section):
@@ -106,6 +112,18 @@ class InstallerLanguageTests(unittest.TestCase):
         self.assertIn("StopUninstall(CustomMessage('UninstallCannotRemove'))", script)
 
 
+    def test_confirmed_owner_repair_is_interactive_only_and_keeps_failure_exit(self):
+        source = (self.root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
+        block = source.split("procedure CurStepChanged(", 1)[1].split("function GetCustomSetupExitCode", 1)[0]
+        guard = "if not ShellRegistrationComplete and not WizardSilent then begin"
+        self.assertEqual(block.count("'--shell-repair-registration'"), 1)
+        self.assertIn(guard, block)
+        after_guard = block.split(guard, 1)[1]
+        self.assertIn("'--shell-repair-registration'", after_guard.split("end;", 1)[0])
+        self.assertIn("ShellRegistrationComplete := RepairResult = 0", after_guard)
+        self.assertIn("ShellRegistrationFailure := CustomMessage('RegistrationFailed')", after_guard)
+        self.assertIn("if ShellRegistrationComplete then Result := 0 else Result := 10", source)
+
     def test_native_design_preserves_engine_and_accessibility(self):
         ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
         script = (self.root / "packaging/windows/Luma.iss").read_text(encoding="utf-8")
@@ -125,6 +143,33 @@ class InstallerLanguageTests(unittest.TestCase):
         self.assertIn("DisableDirPage=no", script)
         self.assertIn("WizardForm.SelectDirBrowseLabel.ShowAccelChar := True", ui)
         self.assertIn("WizardForm.SelectDirBrowseLabel.FocusControl := WizardForm.DirEdit", ui)
+
+    def test_folder_button_keeps_accessibility_and_native_browse_action(self):
+        ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
+        for statement in ("LumaBrowseButton := TBitmapButton.Create(WizardForm)",
+                          "LumaBrowseButton.Caption := CustomMessage('ChangeLocation')",
+                          "LumaBrowseButton.Hint := CustomMessage('ChangeLocation')",
+                          "LumaBrowseButton.TabStop := True",
+                          "LumaBrowseButton.OnClick := WizardForm.DirBrowseButton.OnClick",
+                          "ContentWidth := WizardForm.SelectDirPage.ClientWidth",
+                          "LumaBrandIcon.BackColor := clNone"):
+            self.assertIn(statement, ui)
+        self.assertIn("ScaleX(38), ScaleY(38)", ui)
+        self.assertIn("LumaBrowseButton.Bitmap.Canvas", ui)
+        self.assertNotIn("LumaBrandIcon.Bitmap.Canvas", ui)
+
+    def test_progress_stays_engine_owned_without_simulated_animation(self):
+        ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
+        self.assertIn("procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer)", ui)
+        self.assertIn("LumaSetWindowTheme(Window, #0, #0)", ui)
+        self.assertIn("LumaSetWindowRgn(Window, Region, True)", ui)
+        self.assertIn("LumaDeleteObject(Region)", ui)
+        self.assertIn("WizardForm.ProgressGauge.StyleElements := LumaProgressStyleElements", ui)
+        self.assertIn("ContentWidth := WizardForm.InstallingPage.ClientWidth", ui)
+        for property_name in ("Min", "Max", "Position", "State", "Style", "Visible"):
+            self.assertNotRegex(ui, rf"ProgressGauge\.{property_name}\s*:=")
+        for forbidden in ("SetTimer", "CreateTimer", "Sleep(", "OnPaint :="):
+            self.assertNotIn(forbidden, ui)
 
     def test_pascal_arrays_cannot_be_misread_as_inno_sections(self):
         # Inno scans leading '[' before Pascal compilation, even inside [Code].
@@ -166,6 +211,46 @@ class InstallerLanguageTests(unittest.TestCase):
         self.assertIn("$UiFontScaleTest -and !$Artifacts.StartsWith($UiTestRoot", build)
         self.assertIn("windows-x64-ui-font-test", script)
         self.assertIn("never release artifacts", build)
+
+
+class InstallerNativeEvidenceTests(unittest.TestCase):
+    def test_progress_parser_requires_actual_native_callback_rows(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "install.log"
+            path.write_text("LUMA_PROGRESS rounded clipping unavailable\n"
+                "LUMA_PROGRESS window=12;gauge=15;current=25;maximum=100;position=25;minimum=0;range=100\n",
+                encoding="utf-16")
+            self.assertEqual(progress_smoke.progress_rows(path), [{"window": 12, "gauge": 15,
+                "current": 25, "maximum": 100, "position": 25, "minimum": 0, "range": 100}])
+
+    def test_real_progress_observer_does_not_write_progress_or_click_install(self):
+        source = (MODULE.parents[1] / "scripts/smoke_installer_progress.py").read_text(encoding="utf-8")
+        self.assertIn('"/SILENT" not in command', source)
+        self.assertIn("accessible_progress(gauge)", source)
+        self.assertIn("api.owned(gauge, job.job)", source)
+        self.assertIn("0 < position < high", source)
+        for forbidden in ("PBM_SETPOS", "BM_CLICK", "SendKeys", "SetValue", "SetTimer"):
+            self.assertNotIn(forbidden, source)
+
+    def test_parent_clipping_is_rejected_even_inside_wizard(self):
+        page = [236, 322, 788, 470]
+        released_button = [696, 353, 800, 391]
+        self.assertFalse(ui_smoke.contains_rect(page, released_button))
+        self.assertTrue(ui_smoke.contains_rect(page, [750, 353, 788, 391]))
+
+    def test_logo_proof_rejects_the_reported_rectangular_backing(self):
+        from PIL import Image, ImageDraw
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "wizard.png"
+            image = Image.new("RGB", (200, 160), "#222222")
+            metrics = {"logo_left": 34, "logo_top": 31, "logo_width": 66, "logo_height": 66}
+            image.save(path)
+            self.assertTrue(ui_smoke.verify_logo_background(path, metrics, [0, 0, 200, 160],
+                [0, 0, 200, 160])["passed"])
+            ImageDraw.Draw(image).rectangle((34, 31, 99, 96), fill="#282828")
+            image.save(path)
+            with self.assertRaisesRegex(AssertionError, "rectangular backing"):
+                ui_smoke.verify_logo_background(path, metrics, [0, 0, 200, 160], [0, 0, 200, 160])
 
 
 class InstallerCompilePreflightTests(unittest.TestCase):

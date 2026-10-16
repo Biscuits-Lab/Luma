@@ -196,7 +196,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Exe: String;
-  ResultCode: Integer;
+  ResultCode, RepairResult: Integer;
 begin
   if CurStep <> ssPostInstall then Exit;
   ShellRegistrationComplete := False;
@@ -206,6 +206,16 @@ begin
           SW_HIDE, ewWaitUntilTerminated, ResultCode) then
     ShellRegistrationComplete := ResultCode = 0;
   Log(Format('Luma shell registration helper result: %d', [ResultCode]));
+  if not ShellRegistrationComplete and not WizardSilent then begin
+    { The packaged helper owns a default-No confirmation naming the exact old
+      registration owner. It may migrate only that intact, expected owner.
+      Silent installs and in-app managed updates never enter this path. }
+    RepairResult := -1;
+    if Exec(Exe, '--shell-repair-registration', ExtractFileDir(Exe),
+            SW_SHOWNORMAL, ewWaitUntilTerminated, RepairResult) then
+      ShellRegistrationComplete := RepairResult = 0;
+    Log(Format('Luma interactive registration repair result: %d', [RepairResult]));
+  end;
   if not ShellRegistrationComplete then begin
     { Keep every payload: an older DLL can still be mapped by Explorer. The
       registrar rolls back its own transaction; never delete files on failure. }
@@ -221,11 +231,59 @@ begin
   if ShellRegistrationComplete then Result := 0 else Result := 10;
 end;
 
-function FirstBusyBinary(const Directory: String): String;
+function LumaBusyCreateFile(FileName: String; DesiredAccess, ShareMode: DWORD;
+  SecurityAttributes: DWORD_PTR; CreationDisposition, FlagsAndAttributes: DWORD;
+  TemplateFile: THandle): THandle;
+  external 'CreateFileW@kernel32.dll stdcall';
+function LumaBusyCloseHandle(Handle: THandle): BOOL;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+function LumaCanExclusivelyOpenBinary(const Path: String;
+  var RemainingRetries: Integer): Boolean;
+const
+  ReadWriteAccess = $C0000000; { GENERIC_READ or GENERIC_WRITE }
+  OpenExisting = 3;
+  NormalAttributes = $80;
+  RetryDelayMilliseconds = 50;
+var
+  FileHandle: THandle;
+  ErrorCode, Attempt: Integer;
+begin
+  Result := False;
+  Attempt := 1;
+  repeat
+    { Probe only: never create, truncate, write bytes, or delete a binary.
+      No sharing preserves the existing mapped/in-use binary safety check. }
+    FileHandle := LumaBusyCreateFile(Path, ReadWriteAccess, 0, 0,
+      OpenExisting, NormalAttributes, 0);
+    { Inno captures GetLastError when the DLL returns, before its own API calls
+      can overwrite it. Do not log or call another DLL before reading this. }
+    ErrorCode := DLLGetLastError;
+    if FileHandle <> -1 then begin
+      if not LumaBusyCloseHandle(FileHandle) then begin
+        ErrorCode := DLLGetLastError;
+        Log(Format('LUMA_BUSY close_failed;win32_error=%d;path=%s', [ErrorCode, Path]));
+        Exit;
+      end;
+      Result := True;
+      Exit;
+    end;
+    Log(Format('LUMA_BUSY open_failed;win32_error=%d;attempt=%d;retries_remaining=%d;path=%s', [
+      ErrorCode, Attempt, RemainingRetries, Path]));
+    { Only sharing/lock contention can be transient after our helper exits.
+      Access denied and every other failure remain immediately fail-closed. }
+    if ((ErrorCode <> 32) and (ErrorCode <> 33)) or (RemainingRetries <= 0) then Exit;
+    RemainingRetries := RemainingRetries - 1;
+    Sleep(RetryDelayMilliseconds);
+    Attempt := Attempt + 1;
+  until False;
+end;
+
+function FirstBusyBinaryWithBudget(const Directory: String;
+  var RemainingRetries: Integer): String;
 var
   Entry: TFindRec;
   Path, Extension: String;
-  Stream: TFileStream;
 begin
   Result := '';
   if not FindFirst(AddBackslash(Directory) + '*', Entry) then Exit;
@@ -235,20 +293,17 @@ begin
         Path := AddBackslash(Directory) + Entry.Name;
         { Never follow a junction/symlink outside the installed payload. }
         if (Entry.Attributes and $400) <> 0 then begin
+          Log('LUMA_BUSY reparse_point_rejected;path=' + Path);
           Result := Path;
           Exit;
         end;
         if (Entry.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then begin
-          Result := FirstBusyBinary(Path);
+          Result := FirstBusyBinaryWithBudget(Path, RemainingRetries);
           if Result <> '' then Exit;
         end else begin
           Extension := Lowercase(ExtractFileExt(Path));
           if (Extension = '.dll') or (Extension = '.exe') or (Extension = '.pyd') then begin
-            try
-              { Open without modifying bytes; a mapped binary denies write access. }
-              Stream := TFileStream.Create(Path, fmOpenReadWrite or fmShareExclusive);
-              Stream.Free;
-            except
+            if not LumaCanExclusivelyOpenBinary(Path, RemainingRetries) then begin
               Result := Path;
               Exit;
             end;
@@ -259,6 +314,16 @@ begin
   finally
     FindClose(Entry);
   end;
+end;
+
+function FirstBusyBinary(const Directory: String): String;
+var
+  RemainingRetries: Integer;
+begin
+  { One total wait budget for every file and recursive directory, not one per
+    binary: at most 20 waits of 50 ms after the unregister helper has exited. }
+  RemainingRetries := 20;
+  Result := FirstBusyBinaryWithBudget(Directory, RemainingRetries);
 end;
 
 procedure StopUninstall(const Reason: String);

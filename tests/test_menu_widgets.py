@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QAbstractAnimation
-from PySide6.QtGui import QAccessible, QContextMenuEvent, QImage
+from PySide6.QtGui import QAccessible, QContextMenuEvent, QCursor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -334,27 +334,46 @@ def test_native_popup_reclamps_reserved_work_area_without_resizing(qapp, monkeyp
 
 
 @pytest.mark.parametrize('rows', [10, 40])
-def test_over_tall_popup_uses_native_scroll_within_reserved_work_area(qapp, monkeypatch, rows):
+def test_over_tall_popup_uses_native_scroll_within_reserved_work_area(qapp, monkeypatch, request, rows):
     # Cover both the subtle case that fits the full monitor but not the work
     # area, and content taller than the full monitor. Height-only clipping
     # would keep geometry in bounds while making the final rows inaccessible.
     screen = QApplication.primaryScreen()
     full = screen.geometry()
     area = QRect(full.left(), full.top(), full.width(), min(220, full.height() - 40))
+    # This is a keyboard-only test. Native popup exposure/placement can queue
+    # mouse enter/leave events at the cursor left by an earlier mouse test;
+    # QMenu correctly clears activeAction on Leave. Park below the simulated
+    # work area before opening, then wait for exposure before sending keys.
+    old_cursor = QCursor.pos()
+    QCursor.setPos(full.bottomLeft())
+    qapp.processEvents()
     menu = RoundedMenu()
+    def cleanup():
+        menu.close()
+        QCursor.setPos(old_cursor)
+        qapp.processEvents()
+    # Clean up even if a geometry/keyboard assertion fails, so a failed popup
+    # cannot grab input for the remaining native UI checks.
+    request.addfinalizer(cleanup)
     monkeypatch.setattr(menu, 'screen', lambda: SimpleNamespace(
         availableGeometry=lambda: area, geometry=lambda: full))
     calls = []
     actions = [menu.add_icon_action(f'Item {index}', 'copy',
                lambda checked=False, index=index: calls.append(index)) for index in range(rows)]
     menu.popup(area.bottomRight())
+    assert QTest.qWaitForWindowExposed(menu)
     qapp.processEvents()
     assert area.contains(menu.geometry())
+    assert not menu.geometry().contains(QCursor.pos())
     assert menu.columnCount() == 1
     assert menu.actionGeometry(actions[-1]).bottom() >= menu.height()
     QTest.keyClick(menu, Qt.Key.Key_End)
+    assert menu.activeAction() is actions[-1], 'End did not select the final row'
     qapp.processEvents()
-    assert menu.activeAction() is actions[-1]
+    assert menu.activeAction() is actions[-1], (
+        f'Selection changed after native events: visible={menu.isVisible()}, '
+        f'cursor={QCursor.pos()}, geometry={menu.geometry()}')
     assert area.contains(menu.geometry())
     assert menu.rect().contains(menu.actionGeometry(actions[-1]))
     QTest.keyClick(menu, Qt.Key.Key_Home)
@@ -373,6 +392,7 @@ def test_over_tall_popup_uses_native_scroll_within_reserved_work_area(qapp, monk
     assert calls == [rows - 1] and not menu.isVisible()
     # Reopening resets native scroll position and the work-area constraints.
     menu.popup(area.bottomRight())
+    assert QTest.qWaitForWindowExposed(menu)
     qapp.processEvents()
     QTest.keyClick(menu, Qt.Key.Key_Home)
     assert menu.rect().contains(menu.actionGeometry(actions[0]))

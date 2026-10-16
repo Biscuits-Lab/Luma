@@ -24,6 +24,9 @@ asserts the helper is terminated after the provider's ten-second timeout.
 A read-only-pin fixture opens the input with LibRaw's READ/share-READ mode.
 Before and after that open, WRITE and DELETE probe opens must fail specifically
 with sharing violations, verifying the provider's retained pin.
+An 8 MiB patterned-input case checks every byte from the separate helper process
+and repeats those pin checks. Temporary input is handed off through Windows'
+coherent file cache; it is not flushed to durable storage before decoding.
 
 These synthetic tests do not replace real decoder or surrogate smoke checks.
 
@@ -117,6 +120,12 @@ The direct path reports the exact provider HRESULT, including helper launch or
 job assignment failure. Windows can wrap a surrogate-side provider failure as
 WTS_E_FAILEDEXTRACTION; the cache HRESULT is reported separately. A failed
 surrogate test must not be relabeled as a passing in-process test.
+The real direct helper test enables `LUMA_THUMBNAIL_DIAGNOSTICS=1` in its own
+process. Its stderr records fixed phase names and elapsed milliseconds for temp
+creation, stream copying, read-only pinning, process startup, helper waiting,
+bitmap readback and cleanup. No input paths or pixel data are recorded. This
+diagnostic switch does not alter deadlines, retry failures or write log files;
+ordinary Explorer requests leave it disabled.
 
 ## Limits and remaining coverage
 

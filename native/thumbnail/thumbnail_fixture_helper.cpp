@@ -6,6 +6,7 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -19,6 +20,7 @@ namespace {
 
 constexpr std::uint32_t kMaxSize = 1024;
 constexpr DWORD kMaxInputBytes = 1024;
+constexpr DWORD kBufferedInputBytes = 8 * 1024 * 1024;
 constexpr DWORD kMaxPixelBytes = 4 * 1024 * 1024;
 
 class Handle {
@@ -106,6 +108,30 @@ int ReadProtocol(HANDLE input, Protocol& protocol) {
     LARGE_INTEGER length{};
     if (!GetFileSizeEx(input, &length)) {
         return WinFail(L"GetFileSizeEx(input)");
+    }
+    if (length.QuadPart == kBufferedInputBytes) {
+        // Cross-process reader visibility must not depend on forcing the
+        // provider's temporary file to durable storage. Check every byte,
+        // spanning many CopyStream chunks, before returning a valid bitmap.
+        std::array<BYTE, 64 * 1024> block{};
+        DWORD total = 0;
+        while (total < kBufferedInputBytes) {
+            DWORD received = 0;
+            const DWORD wanted = (std::min)(
+                static_cast<DWORD>(block.size()), kBufferedInputBytes - total);
+            if (!ReadFile(input, block.data(), wanted, &received, nullptr))
+                return WinFail(L"ReadFile(buffered input)");
+            if (!received || received > wanted)
+                return Fail(L"buffered input was truncated");
+            for (DWORD index = 0; index < received; ++index) {
+                if (block[index] != static_cast<BYTE>((total + index) % 251))
+                    return Fail(L"buffered input bytes changed");
+            }
+            total += received;
+        }
+        protocol.lines[0] = "read-only-pin";
+        protocol.count = 1;
+        return 0;
     }
     if (length.QuadPart <= 0 || length.QuadPart > kMaxInputBytes) {
         return Fail(L"input must contain 1 to 1024 bytes");

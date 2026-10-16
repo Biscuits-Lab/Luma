@@ -222,22 +222,27 @@ def test_updater_dialog_labels_versions_and_raw_launch_failure(qapp, tmp_path, m
         assert dialog.windowTitle() == translated(language, 'Luma · Settings / Updates')
         assert dialog.check_button.text() == translated(language, 'Check for updates')
         release, _, _ = sample_release()
+        from luma.update_installation import InstallationContext
+        from dataclasses import replace
+        release = replace(release, setup=updater.ReleaseAsset('Luma-0.1.1-windows-x64-setup.exe', 'unused', 2048))
+        monkeypatch.setattr(updater, 'detect_installation', lambda: InstallationContext('managed', tmp_path / 'old.exe', tmp_path, '0.1.0'))
         monkeypatch.setattr(updater, 'sys', SimpleNamespace(platform='win32'))
         dialog._completed(0, release)
-        assert dialog.status_label.text() == translated(language, 'Luma {version} is available ({size:.1f} MB).\nDownload and install will verify SHA-256 and install a separate copy in your local application-data folder. Your current copy stays available for rollback. The new version will run only when you click Launch.', version=release.version, size=release.archive.size / (1024 * 1024))
+        assert dialog.status_label.text() == translated(language, 'Luma {version} is available ({size:.1f} MB).\nAfter SHA-256 verification, Setup updates this installation and its shortcuts. Previous payloads remain available. Your current app stays open until the new version confirms startup.', version=release.version, size=release.setup.size / (1024 * 1024))
         executable = tmp_path / '原始 red_{channel}' / 'Luma.exe'
         executable.parent.mkdir()
         executable.write_bytes(b'MZ fake')
-        installed = updater.InstalledUpdate('0.1.1', executable.parent, executable)
+        installed = updater.ManagedUpdate('0.1.1', executable.parent, executable, tmp_path/'old.exe', tmp_path)
         dialog._completed(0, installed)
         assert str(executable) in dialog.status_label.text()
         assert dialog.launch_button.text() == translated(language, 'Launch new version and close Luma')
         raw = f'Cannot launch {executable}: native details {{raw}}'
         def fail(*args, **kwargs):
             raise OSError(raw)
-        monkeypatch.setattr(updater.subprocess, 'Popen', fail)
+        monkeypatch.setattr(updater, 'launch_verified_update', fail)
         dialog.launch()
-        assert dialog.status_label.text() == translated(language, 'The new version could not be launched. Your current Luma is still running; you can use it and try again later.') + '\n\n' + tr('Technical details:') + '\n' + raw
+        wait_for(qapp, lambda: not dialog._busy)
+        assert dialog.status_label.text() == translated(language, 'The update could not be completed. Your current Luma stays open.') + '\n\n' + tr('Technical details:') + '\n' + raw
     finally:
         dialog.close()
 
@@ -253,7 +258,7 @@ def test_generic_updater_worker_error_is_actionable_and_verbatim(qapp, monkeypat
     try:
         dialog._start(fail)
         wait_for(qapp, lambda: not dialog._busy)
-        assert dialog.status_label.text() == translated(language, 'The update could not be completed. Your existing copy is unchanged.') + '\n\n' + tr('Technical details:') + '\n' + raw
+        assert dialog.status_label.text() == translated(language, 'The update could not be completed. Your current Luma stays open.') + '\n\n' + tr('Technical details:') + '\n' + raw
         assert dialog.check_button.isEnabled()
         assert dialog.close_button.text() == ''
         assert dialog.close_button.accessibleName() == tr('Close')
@@ -318,13 +323,15 @@ def test_updater_result_variants_are_localized(qapp, monkeypatch, language, case
     dialog = updater.UpdateDialog(None, current)
     try:
         monkeypatch.setattr(updater, 'sys', SimpleNamespace(platform='linux' if case == 'non_windows' else 'win32'))
+        from luma.update_installation import InstallationContext
+        monkeypatch.setattr(updater, 'detect_installation', lambda: InstallationContext('managed', Path('/test/Luma.exe'), Path('/test'), '0.1.0'))
         if case == 'missing_assets':
             release = updater.Release(release.version, release.tag, release.url, None, None)
         dialog._completed(0, release)
         key = {
             'current': "You're up to date. Latest stable release: {version}",
             'non_windows': 'Luma {version} is available.\nDownload and installation from this window require Windows x64.',
-            'missing_assets': 'Luma {version} is available.\nIts Windows ZIP or SHA256SUMS is not published yet. Please check again later.',
+            'missing_assets': 'The package for this installation is not published yet. Please check again later.',
         }[case]
         assert dialog.status_label.text() == translated(language, key, version=release.version)
         assert dialog.download_button.isHidden()

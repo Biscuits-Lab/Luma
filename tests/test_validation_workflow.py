@@ -5,7 +5,7 @@ import re
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/thumbnail-validation.yml'
-REQUIRED = ('thumbnails', 'scaled_ui', 'ui_capture', 'installer_ui', 'drop_regression')
+REQUIRED = ('thumbnails', 'scaled_ui', 'ui_capture', 'installer_ui', 'drop_regression', 'managed_update')
 
 
 def test_all_continued_diagnostics_are_covered_by_fail_closed_gate():
@@ -26,7 +26,7 @@ def test_all_continued_diagnostics_are_covered_by_fail_closed_gate():
         blocks_candidate = any(value != 'success' for value in outcomes)
         assert blocks_candidate == (outcomes != ('success',) * len(REQUIRED))
     gate_index = blocks.index(gate)
-    candidate = next(block for block in blocks if 'name: luma-0.1.3-windows-candidate\n' in block)
+    candidate = next(block for block in blocks if 'name: luma-0.1.4-windows-candidate\n' in block)
     assert blocks.index(candidate) > gate_index
     assert 'if:' not in candidate  # default success() cannot upload after a failed gate
 

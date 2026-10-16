@@ -2,9 +2,10 @@ from pathlib import Path
 import time
 
 import numpy as np
+import pytest
 from PIL import Image
 from PySide6.QtCore import Qt, QPointF, QMimeData, QUrl
-from PySide6.QtGui import QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent
 from PySide6.QtTest import QTest
 
 from luma.app import ViewerWindow
@@ -17,6 +18,34 @@ def wait_for(app, predicate, timeout=6):
         time.sleep(.008)
     app.processEvents()
     assert predicate()
+
+
+def drop_local_path(app, target, path):
+    """Exercise Qt's widget dispatch instead of calling a drop handler directly."""
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(path))])
+    position = target.rect().center()
+    actions = Qt.DropAction.CopyAction
+    buttons = Qt.MouseButton.LeftButton
+    modifiers = Qt.KeyboardModifier.NoModifier
+    entered = QDragEnterEvent(position, actions, mime, buttons, modifiers)
+    app.sendEvent(target, entered)
+    dropped = False
+    try:
+        assert entered.isAccepted()
+        moved = QDragMoveEvent(position, actions, mime, buttons, modifiers)
+        # QWidgetWindow carries the accepted enter action into the first move.
+        moved.setDropAction(entered.dropAction())
+        moved.setAccepted(entered.isAccepted())
+        app.sendEvent(target, moved)
+        assert moved.isAccepted()
+        event = QDropEvent(QPointF(position), actions, mime, buttons, modifiers)
+        app.sendEvent(target, event)
+        dropped = True
+        assert event.isAccepted()
+    finally:
+        if entered.isAccepted() and not dropped:
+            app.sendEvent(target, QDragLeaveEvent())
 
 
 def test_open_navigation_channels_panels_fullscreen_and_read_only(qapp, tmp_path):
@@ -105,11 +134,8 @@ def test_drop_file_and_empty_folder(qapp, tmp_path):
     Image.new('RGB', (10, 20), 'green').save(file)
     win = ViewerWindow()
     win.show()
-    mime = QMimeData()
-    mime.setUrls([QUrl.fromLocalFile(str(file))])
-    event = QDropEvent(QPointF(100, 100), Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
-    win.dropEvent(event)
-    assert event.isAccepted()
+    qapp.processEvents()
+    drop_local_path(qapp, win.welcome, file)
     wait_for(qapp, lambda: win.displayed_path == file)
     empty = tmp_path / 'empty'
     empty.mkdir()
@@ -135,3 +161,70 @@ def test_hdr_exposure_roundtrip(qapp, tmp_path):
     assert after < before
     assert win.canvas.item.pixmap().toImage().pixelColor(0, 0).alpha() == 255
     win.close()
+
+
+@pytest.mark.parametrize('fullscreen', [False, True])
+def test_drop_replaces_loaded_image_through_viewport(qapp, tmp_path, fullscreen):
+    first = tmp_path / 'first.png'
+    second = tmp_path / 'next image.png'
+    folder = tmp_path / '中文 照片'
+    folder.mkdir()
+    third = folder / 'third.png'
+    Image.new('RGB', (80, 60), 'red').save(first)
+    Image.new('RGB', (100, 70), 'blue').save(second)
+    Image.new('RGB', (120, 90), 'green').save(third)
+    originals = {path: path.read_bytes() for path in (first, second, third)}
+    win = ViewerWindow()
+    win.show()
+    try:
+        win.open_path(first)
+        wait_for(qapp, lambda: win.displayed_path == first)
+        if fullscreen:
+            win.toggle_fullscreen()
+            qapp.processEvents()
+            assert win.isFullScreen()
+
+        # The fitted image covers the center of the viewport.
+        drop_local_path(qapp, win.canvas.viewport(), second)
+        wait_for(qapp, lambda: win.displayed_path == second)
+        assert win.canvas.item.pixmap().toImage().pixelColor(0, 0).blue() == 255
+
+        # Repeated drops also work after zooming and when the payload is a folder.
+        win.canvas.zoom(2)
+        drop_local_path(qapp, win.canvas.viewport(), folder)
+        wait_for(qapp, lambda: win.displayed_path == third)
+        assert win.directory == folder
+        assert win.canvas.item.pixmap().toImage().pixelColor(0, 0).green() == 128
+    finally:
+        win.close()
+    assert all(path.read_bytes() == data for path, data in originals.items())
+
+
+def test_loaded_canvas_rejects_nonlocal_drops(qapp, tmp_path):
+    file = tmp_path / 'current.png'
+    Image.new('RGB', (80, 60), 'red').save(file)
+    win = ViewerWindow()
+    win.show()
+    try:
+        win.open_path(file)
+        wait_for(qapp, lambda: win.displayed_path == file)
+        original_image = win.canvas.item.pixmap().toImage().copy()
+        remote = QMimeData()
+        remote.setUrls([QUrl('https://example.com/image.png')])
+        text = QMimeData()
+        text.setText('plain text')
+        for mime in (remote, text):
+            event = QDragEnterEvent(
+                win.canvas.viewport().rect().center(), Qt.DropAction.CopyAction,
+                mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+            )
+            qapp.sendEvent(win.canvas.viewport(), event)
+            try:
+                assert not event.isAccepted()
+                assert win.displayed_path == file
+                assert win.canvas.item.pixmap().toImage() == original_image
+            finally:
+                if event.isAccepted():
+                    qapp.sendEvent(win.canvas.viewport(), QDragLeaveEvent())
+    finally:
+        win.close()

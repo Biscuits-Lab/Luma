@@ -534,6 +534,9 @@ class UpdateDialog(QDialog):
         self.release_button.hide()
         for widget in (self.check_button, self.download_button, self.launch_button, self.release_button):
             layout.addWidget(widget)
+        from .shell_settings import ExplorerIntegrationPanel
+        self.explorer_panel = ExplorerIntegrationPanel(self)
+        layout.addWidget(self.explorer_panel)
         row = QHBoxLayout()
         row.addStretch()
         self.close_button = QPushButton("Close")

@@ -34,12 +34,21 @@ try {
             else { $env:QT_QPA_PLATFORM = $PreviousQtPlatform }
         }
     }
+    & cmake -S native/thumbnail -B build/thumbnail -A x64 -DBUILD_TESTING=ON
+    if ($LASTEXITCODE -ne 0) { throw "Native thumbnail configuration failed. Install Visual Studio C++ build tools and CMake." }
+    & cmake --build build/thumbnail --config Release --parallel 2
+    if ($LASTEXITCODE -ne 0) { throw "Native thumbnail build failed." }
+    if (!$SkipTests) {
+        & ctest --test-dir build/thumbnail -C Release --output-on-failure
+        if ($LASTEXITCODE -ne 0) { throw "Native thumbnail contract tests failed." }
+    }
     $LicenseArgs = @("scripts/collect_licenses.py", "--output", "build/licenses")
     if ($DevelopmentOnly) { $LicenseArgs += "--allow-incomplete" }
     & $Python @LicenseArgs
     if ($LASTEXITCODE -ne 0) { throw "License collection failed; see docs/BUILDING.md." }
     & $Python -m PyInstaller --clean --noconfirm Luma.spec
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
+    Copy-Item build/thumbnail/Release/LumaThumbnail.dll dist/Luma/LumaThumbnail.dll
     & $Python scripts/verify_bundle.py dist/Luma
     if ($LASTEXITCODE -ne 0) { throw "Bundle verification failed." }
     if ($DevelopmentOnly) {

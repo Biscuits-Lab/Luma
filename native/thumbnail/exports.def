@@ -1,0 +1,5 @@
+LIBRARY "LumaThumbnail"
+
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

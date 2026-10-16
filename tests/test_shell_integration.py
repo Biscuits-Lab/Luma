@@ -1,0 +1,671 @@
+import contextlib
+import copy
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from luma import shell_integration as si
+
+EXE = r"C:\Portable Apps\Luma 日本語\Luma.exe"
+OTHER_EXE = r"D:\Pictures Tools\Luma\Luma.exe"
+THIRD_PARTY = "{11111111-2222-3333-4444-555555555555}"
+
+
+class SimulatedCrash(BaseException):
+    pass
+
+
+class FakeRegistry:
+    def __init__(self):
+        self.values = {}
+        self.keys = set()
+        self.handlers = {}
+        self.log = []
+        self.notifications = 0
+        self.target_calls = 0
+        self.fail_target_calls = set()
+        self.crash_on = None
+        self.flush_calls = 0
+        self.fail_flush_calls = set()
+        self.manifest_writes = 0
+        self.fail_manifest_writes = set()
+
+    @staticmethod
+    def address(key, name):
+        # A fake must reject malformed Windows paths instead of mirroring them.
+        si._key(key)
+        return key.casefold(), name.casefold()
+
+    def read(self, key, name):
+        return self.values.get(self.address(key, name))
+
+    def _before_write(self, key):
+        if key == si.METADATA_KEY:
+            self.manifest_writes += 1
+            if self.manifest_writes in self.fail_manifest_writes:
+                self.fail_manifest_writes.remove(self.manifest_writes)
+                raise PermissionError("Injected manifest failure")
+            return
+        self.target_calls += 1
+        if self.crash_on == self.target_calls:
+            self.crash_on = None
+            raise SimulatedCrash()
+        if self.target_calls in self.fail_target_calls:
+            self.fail_target_calls.remove(self.target_calls)
+            raise PermissionError("Injected target failure")
+
+    def write(self, key, name, value):
+        self.address(key, name)
+        self._before_write(key)
+        for ancestor in si._ancestors(key):
+            self.keys.add(ancestor.casefold())
+        self.values[self.address(key, name)] = value
+        self.log.append(("write", key, name))
+
+    def delete_value(self, key, name):
+        self._before_write(key)
+        self.values.pop(self.address(key, name), None)
+        self.log.append(("delete", key, name))
+
+    def key_exists(self, key):
+        si._key(key)
+        return key.casefold() in self.keys
+
+    def delete_empty_key(self, key):
+        assert key in si._ALLOWED_KEYS or key == si.METADATA_KEY
+        normalized = key.casefold()
+        if any(address[0] == normalized for address in self.values):
+            return
+        if any(other.startswith(normalized + "\\") for other in self.keys):
+            return
+        self.keys.discard(normalized)
+        self.log.append(("delete_empty", key))
+
+    def flush(self):
+        self.flush_calls += 1
+        self.log.append(("flush",))
+        if self.flush_calls in self.fail_flush_calls:
+            self.fail_flush_calls.remove(self.flush_calls)
+            raise PermissionError("Injected flush failure")
+
+    def provider_for(self, extension):
+        return self.handlers.get(extension)
+
+    def notify_associations_changed(self):
+        self.notifications += 1
+
+    @contextlib.contextmanager
+    def locked(self):
+        yield
+
+    def seed(self, key, name, value):
+        for ancestor in si._ancestors(key):
+            self.keys.add(ancestor.casefold())
+        self.values[self.address(key, name)] = value
+
+
+def install(registry, exe=EXE):
+    with (
+        patch.object(si, "_runtime_guard"),
+        patch.object(si, "_checked_executable", return_value=exe),
+    ):
+        return si.install(Path(exe), registry=registry)
+
+
+def uninstall(registry):
+    with patch.object(si, "_runtime_guard"):
+        return si.uninstall(registry=registry)
+
+
+def plan_map(exe=EXE, handlers=None):
+    return {(w.key, w.name): w.value for w in si.registration_plan(exe, handlers)}
+
+
+def test_plan_has_no_repeated_or_empty_registry_separators():
+    for write in si.registration_plan(EXE):
+        assert "\\\\" not in write.key
+        assert not write.key.startswith("\\")
+        assert not write.key.endswith("\\")
+        assert all(write.key.split("\\"))
+        assert "/" not in write.key
+    for key in si._ALLOWED_KEYS:
+        assert "\\\\" not in key
+        assert all(key.split("\\"))
+
+
+@pytest.mark.parametrize("fragment", [
+    "", "\\leading", "trailing\\", "repeated\\\\separator", "slash/path", "nul\0part",
+])
+def test_registry_key_join_rejects_malformed_fragments(fragment):
+    with pytest.raises(si.ShellIntegrationError):
+        si._key(si.CLASSES, fragment)
+
+
+def test_pure_plan_uses_quoted_unicode_paths_and_fixed_clsids():
+    plan = plan_map()
+    command = si._key(si.CLASSES, "Luma.Image.png", "shell", "open", "command")
+    assert plan[command, ""] == si.Value(si.REG_SZ, f'"{EXE}" "%1"')
+    for clsid in si.PROVIDERS.values():
+        key = si._key(si.CLASSES, "CLSID", clsid, "InprocServer32")
+        assert plan[key, "ThreadingModel"] == si.Value(si.REG_SZ, "Apartment")
+        assert plan[key, ""].data.endswith(r"\LumaThumbnail.dll")
+    assert len(si.EXTENSIONS) == len(set(si.EXTENSIONS))
+
+
+def test_plan_never_changes_defaults_or_system_handlers():
+    plan = si.registration_plan(EXE)
+    extensions = {si._key(si.CLASSES, ext) for ext in si.EXTENSIONS}
+    for write in plan:
+        lowered = write.key.casefold()
+        assert "userchoice" not in lowered
+        assert "systemfileassociations" not in lowered
+        assert write.name != "DisableProcessIsolation"
+        assert not (write.key in extensions and write.name == "")
+        assert write.key.startswith("Software\\")
+    assert (si.REGISTERED_APPS, "Luma") in plan_map()
+    assert len(plan) <= si.MAX_ENTRIES
+
+
+def test_existing_common_and_custom_raster_providers_are_preserved():
+    plan = plan_map(handlers={".png": THIRD_PARTY, ".webp": THIRD_PARTY})
+
+    def provider(extension):
+        return plan[
+            si._key(si.CLASSES, "Luma.Image." + extension, "shellex", si.THUMBNAIL_IID),
+            "",
+        ].data
+
+    assert provider("png") == THIRD_PARTY
+    assert provider("webp") == THIRD_PARTY
+    assert provider("jpeg") == si.PHOTO_PROVIDER
+    assert provider("dds") == si.PROVIDERS["raster"]
+    assert provider("nef") == si.PROVIDERS["raw"]
+    assert provider("pic") == si.PROVIDERS["hdr"]
+    assert provider("exr") == si.PROVIDERS["exr"]
+
+
+@pytest.mark.parametrize("path", [
+    r"\\server\share\Luma.exe", r"\\?\C:\Luma\Luma.exe",
+    r"C:Luma.exe", r"relative\Luma.exe", r'C:\Bad"Path\Luma.exe',
+    r"C:\Luma\..\Other\Luma.exe", r"C:\Luma\Another.exe", r"C:\NUL\Luma.exe",
+])
+def test_invalid_bundle_paths_are_rejected_by_pure_plan(path):
+    with pytest.raises(si.ShellIntegrationError):
+        si.registration_plan(path)
+
+
+def test_install_persists_and_flushes_journal_before_target_writes():
+    registry = FakeRegistry()
+    result = install(registry)
+    assert result.changed_values > 0
+    first_target = next(
+        i for i, event in enumerate(registry.log)
+        if event[0] == "write" and event[1] != si.METADATA_KEY
+    )
+    assert registry.log[0][:2] == ("write", si.METADATA_KEY)
+    assert ("flush",) in registry.log[:first_target]
+    assert si.status(registry).state == "installed"
+    assert registry.notifications == 1
+
+
+def test_idempotent_install_does_not_rewrite_owned_values():
+    registry = FakeRegistry()
+    install(registry)
+    before = registry.target_calls
+    assert install(registry).changed_values == 0
+    assert registry.target_calls == before
+
+
+def test_update_changes_bundle_paths_then_uninstall_removes_only_owned_values():
+    registry = FakeRegistry()
+    install(registry)
+    document, _ = si._read_manifest(registry)
+    assert not si._stale_paths(document["data"]["entries"], EXE)
+    assert si._stale_paths(document["data"]["entries"], OTHER_EXE)
+    assert install(registry, OTHER_EXE).changed_values > 0
+    command = si._key(si.CLASSES, "Luma.Image.png", "shell", "open", "command")
+    assert registry.read(command, "").data == f'"{OTHER_EXE}" "%1"'
+    uninstall(registry)
+    assert registry.values == {}
+    assert si.status(registry).state == "not_installed"
+
+
+def test_identical_preexisting_values_are_not_adopted():
+    registry = FakeRegistry()
+    key = si._key(si.CLASSES, "Luma.Image.png")
+    original = si.Value(si.REG_SZ, "Luma image")
+    registry.seed(key, "", original)
+    install(registry)
+    uninstall(registry)
+    assert registry.read(key, "") == original
+    assert len(registry.values) == 1
+
+
+def test_different_preexisting_values_block_all_install_writes():
+    registry = FakeRegistry()
+    key = si._key(si.CLASSES, "Luma.Image.png")
+    registry.seed(key, "", si.Value(si.REG_SZ, "Another owner"))
+    snapshot = copy.deepcopy(registry.values)
+    with pytest.raises(si.RegistrationConflict):
+        install(registry)
+    assert registry.values == snapshot
+    assert registry.log == []
+
+
+def test_update_does_not_clobber_third_party_changes():
+    registry = FakeRegistry()
+    install(registry)
+    key = si._key(si.CLASSES, "Luma.Image.png", "shell", "open", "command")
+    other = si.Value(si.REG_SZ, '"C:\\Other\\Reader.exe" "%1"')
+    registry.seed(key, "", other)
+    snapshot = copy.deepcopy(registry.values)
+    with pytest.raises(si.RegistrationConflict):
+        install(registry, OTHER_EXE)
+    assert registry.values == snapshot
+    assert si.status(registry).state == "modified"
+    assert uninstall(registry).preserved_values == 1
+    assert registry.read(key, "") == other
+    assert len(registry.values) == 1
+
+
+def test_partial_write_failure_is_rolled_back():
+    registry = FakeRegistry()
+    registry.fail_target_calls = {3}
+    with pytest.raises(si.ShellIntegrationError):
+        install(registry)
+    assert registry.values == {}
+    assert si.status(registry).state == "not_installed"
+
+
+def test_failed_rollback_keeps_pending_journal_for_next_explicit_action():
+    registry = FakeRegistry()
+    registry.fail_target_calls = {3, 4}
+    with pytest.raises(si.RecoveryRequired):
+        install(registry)
+    assert si.status(registry).state == "recovery_required"
+    assert uninstall(registry).recovered
+    assert registry.values == {}
+
+
+def test_initial_journal_flush_failure_performs_no_target_writes():
+    registry = FakeRegistry()
+    registry.fail_flush_calls = {1}
+    with pytest.raises(si.RecoveryRequired):
+        install(registry)
+    assert registry.target_calls == 0
+    assert si.status(registry).state == "recovery_required"
+    assert uninstall(registry).recovered
+    assert registry.values == {}
+
+
+def test_final_manifest_failure_rolls_back_targets():
+    registry = FakeRegistry()
+    registry.fail_manifest_writes = {2}
+    with pytest.raises(si.ShellIntegrationError):
+        install(registry)
+    assert registry.values == {}
+
+
+def test_crash_leaves_journal_and_readonly_status_does_not_recover():
+    registry = FakeRegistry()
+    registry.crash_on = 3
+    with pytest.raises(SimulatedCrash):
+        install(registry)
+    snapshot = copy.deepcopy(registry.values)
+    assert si.status(registry).state == "recovery_required"
+    assert registry.values == snapshot
+    assert uninstall(registry).recovered
+    assert registry.values == {}
+
+
+def test_crash_recovery_preserves_a_later_third_party_write():
+    registry = FakeRegistry()
+    registry.crash_on = 3
+    with pytest.raises(SimulatedCrash):
+        install(registry)
+    first = si.registration_plan(EXE)[0]
+    other = si.Value(si.REG_SZ, "Changed after interruption")
+    registry.seed(first.key, first.name, other)
+    uninstall(registry)
+    assert registry.read(first.key, first.name) == other
+    assert len(registry.values) == 1
+
+
+def test_uninstall_failure_restores_previous_registration():
+    registry = FakeRegistry()
+    install(registry)
+    snapshot = copy.deepcopy(registry.values)
+    registry.fail_target_calls = {registry.target_calls + 3}
+    with pytest.raises(si.ShellIntegrationError):
+        uninstall(registry)
+    assert registry.values == snapshot
+    assert si.status(registry).state == "installed"
+
+
+def test_cleanup_never_recursively_deletes_an_unknown_child():
+    registry = FakeRegistry()
+    install(registry)
+    key = si._key(si.CLASSES, "Luma.Image.png", "ThirdPartyChild")
+    other = si.Value(si.REG_SZ, "keep")
+    registry.seed(key, "External", other)
+    uninstall(registry)
+    assert registry.read(key, "External") == other
+    assert registry.key_exists(si._key(si.CLASSES, "Luma.Image.png"))
+
+
+@pytest.mark.parametrize("raw", [
+    si.Value(si.REG_SZ, '{"version":999,"state":"active"}'),
+    si.Value(si.REG_SZ, '{"version":1,"version":1,"state":"active"}'),
+    si.Value(3, b"not a string"),
+    si.Value(si.REG_SZ, "{" * 1000),
+    si.Value(si.REG_SZ, " " * (si.MAX_MANIFEST_BYTES + 1)),
+])
+def test_unknown_or_invalid_manifest_is_never_overwritten(raw):
+    registry = FakeRegistry()
+    registry.seed(si.METADATA_KEY, si.MANIFEST_NAME, raw)
+    snapshot = copy.deepcopy(registry.values)
+    assert si.status(registry).state == "blocked"
+    with pytest.raises(si.InvalidManifest):
+        install(registry)
+    with pytest.raises(si.InvalidManifest):
+        uninstall(registry)
+    assert registry.values == snapshot
+
+
+def test_tampered_manifest_cannot_target_extension_defaults():
+    registry = FakeRegistry()
+    install(registry)
+    document, _ = si._read_manifest(registry)
+    document["data"]["entries"][0]["key"] = si._key(si.CLASSES, ".png")
+    registry.seed(si.METADATA_KEY, si.MANIFEST_NAME,
+                  si.Value(si.REG_SZ, json.dumps(document)))
+    snapshot = copy.deepcopy(registry.values)
+    with pytest.raises(si.InvalidManifest):
+        uninstall(registry)
+    assert registry.values == snapshot
+    assert registry.read(si._key(si.CLASSES, ".png"), "") is None
+
+
+def test_tampered_manifest_cannot_restore_an_arbitrary_command():
+    registry = FakeRegistry()
+    install(registry)
+    document, _ = si._read_manifest(registry)
+    entry = next(e for e in document["data"]["entries"]
+                 if e["key"].endswith(r"\shell\open\command"))
+    entry["written"]["data"] = '"C:\\Windows\\System32\\cmd.exe" /c something'
+    registry.seed(si.METADATA_KEY, si.MANIFEST_NAME,
+                  si.Value(si.REG_SZ, json.dumps(document)))
+    snapshot = copy.deepcopy(registry.values)
+    with pytest.raises(si.InvalidManifest):
+        uninstall(registry)
+    assert registry.values == snapshot
+
+
+def test_public_api_wraps_permission_errors():
+    registry = FakeRegistry()
+    with (
+        patch.object(si, "_runtime_guard"),
+        patch.object(si, "_checked_executable", side_effect=PermissionError("blocked")),
+    ):
+        with pytest.raises(si.ShellIntegrationError, match="No elevation"):
+            si.install(Path(EXE), registry)
+    assert registry.values == {}
+
+
+def test_source_run_is_rejected_even_with_injected_registry():
+    registry = FakeRegistry()
+    with (
+        patch.object(si.sys, "platform", "win32"),
+        patch.object(si.sys, "frozen", False, create=True),
+    ):
+        with pytest.raises(si.ShellIntegrationError, match="packaged"):
+            si.install(Path(EXE), registry)
+    assert registry.values == {}
+
+
+def test_non_x64_runtime_is_rejected():
+    with (
+        patch.object(si.sys, "platform", "win32"),
+        patch.object(si.sys, "frozen", True, create=True),
+        patch.object(si.platform, "machine", return_value="ARM64"),
+    ):
+        with pytest.raises(si.ShellIntegrationError, match="x64"):
+            si._runtime_guard()
+
+
+def test_non_windows_runtime_is_rejected():
+    with patch.object(si.sys, "platform", "linux"):
+        with pytest.raises(si.ShellIntegrationError, match="Windows"):
+            si._runtime_guard()
+
+
+_REAL_REGISTRY_CI = (
+    sys.platform == "win32"
+    and os.environ.get("GITHUB_ACTIONS") == "true"
+    and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+    and os.environ.get("LUMA_SHELL_TEST_REAL_REGISTRY") == "1"
+)
+
+
+@pytest.mark.skipif(
+    not _REAL_REGISTRY_CI,
+    reason="Explicitly enabled disposable GitHub-hosted Windows runner only",
+)
+def test_real_hkcu_registration_lifecycle_on_disposable_runner():
+    # No normal developer/user-PC test invocation enables this mutation test.
+    # Refuse to start if any Luma registration already exists on the runner.
+    registry = si.WinRegistry()
+    if registry.read(si.METADATA_KEY, si.MANIFEST_NAME) is not None:
+        pytest.skip("Runner already has a shell-integration owner")
+    for write in si.registration_plan(EXE):
+        if registry.read(write.key, write.name) is not None:
+            pytest.skip("Runner already has a Luma registration value")
+    defaults = {
+        ext: registry.read(si._key(si.CLASSES, ext), "")
+        for ext in si.EXTENSIONS
+    }
+    try:
+        assert install(registry).changed_values > 0
+        assert si.status(registry).state == "installed"
+        assert install(registry).changed_values == 0
+        assert install(registry, OTHER_EXE).changed_values > 0
+        assert uninstall(registry).changed_values > 0
+        assert registry.read(si.METADATA_KEY, si.MANIFEST_NAME) is None
+        for write in si.registration_plan(EXE):
+            assert registry.read(write.key, write.name) is None
+        assert defaults == {
+            ext: registry.read(si._key(si.CLASSES, ext), "")
+            for ext in si.EXTENSIONS
+        }
+    finally:
+        # Uses the normal validated journal and exact compare-before-restore.
+        # Never recursively deletes test keys or restores unchecked snapshots.
+        uninstall(registry)
+
+
+@pytest.mark.skipif(
+    not _REAL_REGISTRY_CI,
+    reason="Explicitly enabled disposable GitHub-hosted Windows runner only",
+)
+def test_real_named_mutex_serializes_processes_without_waiting():
+    registry = si.WinRegistry()
+    code = (
+        "import sys\n"
+        "from luma.shell_integration import WinRegistry, ShellIntegrationError\n"
+        "try:\n"
+        "    with WinRegistry().locked():\n"
+        "        sys.exit(3)\n"
+        "except ShellIntegrationError:\n"
+        "    sys.exit(0)\n"
+    )
+    with registry.locked():
+        result = subprocess.run(
+            [sys.executable, "-c", code], timeout=15, capture_output=True, text=True
+        )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def uninstall_if_executable(registry, executable=EXE):
+    with patch.object(si, "_runtime_guard"):
+        return si.uninstall_if_executable(Path(executable), registry)
+
+
+def test_exact_owner_uninstall_leaves_another_portable_copy_untouched():
+    registry = FakeRegistry()
+    install(registry, OTHER_EXE)
+    snapshot = copy.deepcopy(registry.values)
+    log = list(registry.log)
+    result = uninstall_if_executable(registry, EXE)
+    assert result == si.Result(0)
+    assert registry.values == snapshot
+    assert registry.log == log
+    assert uninstall_if_executable(registry, OTHER_EXE).changed_values > 0
+    assert registry.values == {}
+
+
+def test_exact_owner_uninstall_preserves_modified_values():
+    registry = FakeRegistry()
+    install(registry)
+    key = si._key(si.CLASSES, "Luma.Image.png", "shell", "open", "command")
+    external = si.Value(si.REG_SZ, '"C:\\Other\\App.exe" "%1"')
+    registry.seed(key, "", external)
+    assert uninstall_if_executable(registry).preserved_values == 1
+    assert registry.read(key, "") == external
+
+
+def test_exact_owner_mismatch_never_recovers_pending_install():
+    registry = FakeRegistry()
+    registry.crash_on = 3
+    with pytest.raises(SimulatedCrash):
+        install(registry)
+    snapshot = copy.deepcopy(registry.values)
+    log = list(registry.log)
+    assert uninstall_if_executable(registry, OTHER_EXE) == si.Result(0)
+    assert registry.values == snapshot
+    assert registry.log == log
+    assert uninstall_if_executable(registry, EXE).recovered
+    assert registry.values == {}
+
+
+def test_exact_owner_refuses_ambiguous_pending_move_between_bundles():
+    registry = FakeRegistry()
+    install(registry, EXE)
+    registry.crash_on = registry.target_calls + 2
+    with pytest.raises(SimulatedCrash):
+        install(registry, OTHER_EXE)
+    snapshot = copy.deepcopy(registry.values)
+    for executable in (EXE, OTHER_EXE):
+        with pytest.raises(si.RegistrationConflict, match="different bundles"):
+            uninstall_if_executable(registry, executable)
+        assert registry.values == snapshot
+    # Explicit Settings uninstall can still recover and remove the old owner.
+    assert uninstall(registry).recovered
+    assert registry.values == {}
+
+
+def disable_thumbnails(registry):
+    with patch.object(si, "_runtime_guard"):
+        return si.disable_thumbnails(registry)
+
+
+def test_disable_retains_open_commands_capabilities_and_common_image_handlers():
+    registry = FakeRegistry()
+    registry.handlers[".webp"] = THIRD_PARTY
+    install(registry)
+    document, _ = si._read_manifest(registry)
+    retained = {
+        (entry["key"], entry["name"]): registry.read(entry["key"], entry["name"])
+        for entry in document["data"]["entries"]
+        if not si._is_luma_thumbnail_entry(entry)
+    }
+    result = disable_thumbnails(registry)
+    assert result.changed_values > 0
+    state = si.status(registry)
+    assert state.state == "association_only"
+    assert state.thumbnails_enabled is False
+    for address, value in retained.items():
+        assert registry.read(*address) == value
+    for extension in si.EXTENSIONS:
+        command = si._key(si.CLASSES, "Luma.Image." + extension[1:], "shell", "open", "command")
+        assert registry.read(command, "").data == f'"{EXE}" "%1"'
+        assert registry.read(si._key(si.CLASSES, extension), "") is None
+    png_handler = si._key(si.CLASSES, "Luma.Image.png", "shellex", si.THUMBNAIL_IID)
+    webp_handler = si._key(si.CLASSES, "Luma.Image.webp", "shellex", si.THUMBNAIL_IID)
+    assert registry.read(png_handler, "").data == si.PHOTO_PROVIDER
+    assert registry.read(webp_handler, "").data == THIRD_PARTY
+    for clsid in si.PROVIDERS.values():
+        assert registry.read(si._key(si.CLASSES, "CLSID", clsid, "InprocServer32"), "") is None
+
+
+def test_enable_disable_reenable_and_full_uninstall():
+    registry = FakeRegistry()
+    install(registry)
+    assert si.status(registry).thumbnails_enabled is True
+    disable_thumbnails(registry)
+    assert disable_thumbnails(registry).changed_values == 0
+    assert si.status(registry).state == "association_only"
+    assert install(registry).changed_values > 0
+    assert si.status(registry).thumbnails_enabled is True
+    assert si.status(registry).state == "installed"
+    disable_thumbnails(registry)
+    assert uninstall_if_executable(registry).changed_values > 0
+    assert registry.values == {}
+
+
+def test_disable_preserves_external_handler_change_and_reports_disabled_intent():
+    registry = FakeRegistry()
+    install(registry)
+    handler = si._key(si.CLASSES, "Luma.Image.nef", "shellex", si.THUMBNAIL_IID)
+    external = si.Value(si.REG_SZ, THIRD_PARTY)
+    registry.seed(handler, "", external)
+    assert disable_thumbnails(registry).preserved_values == 1
+    state = si.status(registry)
+    assert state.state == "modified"
+    assert state.thumbnails_enabled is False
+    assert state.modified_values == 1
+    assert registry.read(handler, "") == external
+    with pytest.raises(si.RegistrationConflict):
+        install(registry)
+    uninstall(registry)
+    assert registry.read(handler, "") == external
+
+
+def test_disabled_status_stays_unchecked_when_open_command_changes():
+    registry = FakeRegistry()
+    install(registry)
+    disable_thumbnails(registry)
+    command = si._key(si.CLASSES, "Luma.Image.png", "shell", "open", "command")
+    registry.seed(command, "", si.Value(si.REG_SZ, '"C:\\Other\\Reader.exe" "%1"'))
+    state = si.status(registry)
+    assert state.state == "modified"
+    assert state.thumbnails_enabled is False
+
+
+def test_disable_failure_rolls_back_and_keeps_enabled_state():
+    registry = FakeRegistry()
+    install(registry)
+    snapshot = copy.deepcopy(registry.values)
+    registry.fail_target_calls = {registry.target_calls + 3}
+    with pytest.raises(si.ShellIntegrationError):
+        disable_thumbnails(registry)
+    assert registry.values == snapshot
+    assert si.status(registry).thumbnails_enabled is True
+
+
+def test_interrupted_disable_recovers_then_disables_on_explicit_retry():
+    registry = FakeRegistry()
+    install(registry)
+    registry.crash_on = registry.target_calls + 3
+    with pytest.raises(SimulatedCrash):
+        disable_thumbnails(registry)
+    state = si.status(registry)
+    assert state.state == "recovery_required"
+    assert state.thumbnails_enabled is True
+    assert disable_thumbnails(registry).recovered
+    assert si.status(registry).state == "association_only"
+    assert si.status(registry).thumbnails_enabled is False

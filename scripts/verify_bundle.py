@@ -14,6 +14,8 @@ def verify(bundle: Path) -> list[str]:
     for path in (executable, internal / "luma/assets/icon.png", internal / "licenses/manifest.json", internal / "THIRD_PARTY_NOTICES.md", internal / "docs/REDISTRIBUTION.md"):
         if not path.is_file():
             failures.append(f"Missing required bundle file: {path}")
+    if sys.platform == "win32" and not (bundle / "LumaThumbnail.dll").is_file():
+        failures.append("Missing adjacent native Explorer thumbnail bridge")
     paths = [str(p.relative_to(bundle)).replace("\\", "/") for p in bundle.rglob("*") if p.is_file()]
     lower_paths = [p.lower() for p in paths]
     if any(any(name in p for name in ("webengine", "qt6qml", "qt6quick", "qt6pdf", "qt6virtualkeyboard", "qt6svg", "qt6multimedia")) and "/licenses/" not in p and

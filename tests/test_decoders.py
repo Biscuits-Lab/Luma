@@ -553,3 +553,35 @@ def test_render_multiple_strips_matches_single_rows():
     for row in (0, 127, 128, 129, 255, 256):
         expected = d.render_rgba(image(source.pixels[row:row + 1]), exposure=1.5, tone_map='ACES')
         np.testing.assert_array_equal(rendered[row:row + 1], expected)
+
+@pytest.mark.parametrize("orientation,operation", [
+    (2, Image.Transpose.FLIP_LEFT_RIGHT), (3, Image.Transpose.ROTATE_180),
+    (4, Image.Transpose.FLIP_TOP_BOTTOM), (5, Image.Transpose.TRANSPOSE),
+    (6, Image.Transpose.ROTATE_270), (7, Image.Transpose.TRANSVERSE),
+    (8, Image.Transpose.ROTATE_90),
+])
+@pytest.mark.parametrize("sixteen_bit", [False, True], ids=["rgb", "gray16"])
+def test_tiff_orientation_applied_once_and_source_unchanged(tmp_path, orientation, operation, sixteen_bit):
+    values = (np.array([[0, 65535, 12345], [40000, 20000, 1000]], dtype=np.uint16)
+              if sixteen_bit else rgb_array(3, 2))
+    source = Image.fromarray(values)
+    expected = np.asarray(source.transpose(operation))
+    exif = Image.Exif()
+    exif[274] = orientation
+    path = tmp_path / "oriented.tiff"
+    source.save(path, exif=exif)
+    original = path.read_bytes()
+    decoded = d.decode_image(path)
+    assert (decoded.width, decoded.height) == (expected.shape[1], expected.shape[0])
+    assert not decoded.linear
+    if sixteen_bit:
+        assert decoded.pixels.dtype == np.float32
+        expected_rgb = np.repeat((expected / 65535.0)[..., None], 3, axis=2)
+        np.testing.assert_allclose(decoded.pixels[..., :3], expected_rgb, rtol=1e-6)
+        assert np.all(decoded.pixels[..., 3] == 1)
+        assert "16-bit" in decoded.metadata["Source depth"]
+    else:
+        np.testing.assert_array_equal(decoded.pixels[..., :3], expected)
+        assert np.all(decoded.pixels[..., 3] == 255)
+    assert decoded.metadata["Orientation"] == f"EXIF {orientation}; applied"
+    assert path.read_bytes() == original

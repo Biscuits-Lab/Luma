@@ -220,8 +220,8 @@ def _decode_pillow(path: Path) -> ImageData:
             except (ValueError, TypeError, OSError, SyntaxError):
                 orientation = 1
                 _add_limitation(metadata, 'Malformed EXIF metadata could not be read')
-            # Handle orientation directly: this avoids parsing malformed EXIF a
-            # second time and leaves the source file and source metadata intact.
+            # Capture orientation before loading; Pillow consumes TIFF orientation.
+            # Handle other formats directly without parsing malformed EXIF again.
             operation = {
                 2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180,
                 4: Image.Transpose.FLIP_TOP_BOTTOM, 5: Image.Transpose.TRANSPOSE,
@@ -229,7 +229,8 @@ def _decode_pillow(path: Path) -> ImageData:
                 8: Image.Transpose.ROTATE_90,
             }.get(orientation)
             source.load()
-            working = source.transpose(operation) if operation is not None else source
+            working = (source.transpose(operation)
+                       if operation is not None and source.format != 'TIFF' else source)
             metadata['Orientation'] = f'EXIF {orientation}; applied' if operation is not None else 'As stored'
             _check_size(*working.size, 16 if working.mode in ('I', 'F') or working.mode.startswith('I;16') else 4)
 

@@ -10,6 +10,8 @@ class ImageCanvas(QGraphicsView):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # File drops belong to the window; keep the scene from claiming them.
+        self.setAcceptDrops(False)
         self.setScene(QGraphicsScene(self))
         self.item = QGraphicsPixmapItem()
         self.scene().addItem(self.item)

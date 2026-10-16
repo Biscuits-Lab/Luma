@@ -1,7 +1,7 @@
 # Explorer thumbnails: architecture and validation
 
 This describes the current development candidate, including automatic setup and
-bounded large-HDR previews. Earlier Windows validation of small fixtures does
+bounded large-HDR/EXR previews. Earlier Windows validation of small fixtures does
 not certify these changes. Required-surrogate extraction, installer lifecycle
 checks and the enlarged fixture set must pass for the exact candidate before
 distribution. CI API coverage does not replace manual Explorer checks.
@@ -27,8 +27,8 @@ Per-format Luma.Image.* associations preserve effective common-image providers,
 queried through Windows' association API. Open With can instead select
 Applications\\Luma.exe; that owned route has a content-aware handler for
 HDR/EXR/raster/RAW streams. It does not change unrelated extension/provider keys.
-Settings checks the effective .hdr provider rather than treating a successful
-registration receipt as proof that Windows currently selects it.
+Settings checks the effective .hdr and .exr providers separately rather than
+treating a successful registration receipt as proof that Windows selects either one.
 
 Automatic setup refuses another portable copy's ownership or externally modified
 values. Installer upgrades permit only validated sibling payloads belonging to
@@ -94,13 +94,20 @@ matters. Do not claim otherwise.
   scanline and a pixel-center-sampled linear float preview. Tone mapping happens
   at preview resolution. This deliberately trades fine-detail reconstruction
   for bounded memory; the interactive viewer retains full-resolution precision
+- Flat EXR thumbnails read only the chosen RGB/Y/scalar layer and alpha through
+  the pinned official OpenEXR selected-channel scanline adapter. They retain
+  bounded strips and a pixel-center-sampled preview, then tone-map that preview.
+  Compressed chunks still need decoding; this is not a promise to read only the
+  output pixels. Tiled files use the official adapter, not custom decompression
 - RAW thumbnails prefer embedded JPEG/bitmap previews for speed. A missing preview
   may use bounded half-size LibRaw processing. The main viewer still develops RAW
   rather than substituting an embedded preview
-- Thumbnail source limits: raster/sensor up to 64 MP; EXR and other full-float
-  paths up to 16 MP; bounded Radiance HDR preview up to 256 MP. Every source axis
-  is limited to 32,768 pixels. HDR can exceed the interactive full-image pixel
-  ceiling because no full-size float image is allocated. The unchanged 256 MiB
+- Thumbnail source limits: raster/sensor up to 64 MP; other full-float paths
+  up to 16 MP; bounded Radiance HDR preview up to 256 MP; bounded flat EXR
+  preview up to 268,435,456 pixels (16,384 squared). Every source axis
+  is limited to 32,768 pixels. HDR/EXR thumbnails can exceed their interactive full-image pixel
+  ceilings because no full-size float image is allocated. EXR additionally has
+  header, channel-count, native compression-workspace and strip-memory guards. The unchanged 256 MiB
   compressed-input, 768 MiB process-memory and ten-second worker limits still
   apply. A flat 16K HDR larger than 256 MiB remains unsupported; a compact
   16,384 × 8,192 RLE HDR can produce a bounded preview. Actual success also
@@ -131,9 +138,9 @@ matters. Do not claim otherwise.
    crash/hang recovery and unregister behavior. CI API tests are not a visual
    Explorer test
 
-## If .hdr still displays an icon
+## If .hdr or .exr still displays an icon
 
-Check Settings' registration and effective .hdr association messages. A copied
+Check Settings' registration and effective .hdr/.exr association messages. A copied
 or moved portable folder may need repair; selecting an executable in Open With
 can use a different association than the registered per-format Default Apps
 entry. Reopen the folder after changing the default app. Explorer's own view and
@@ -144,6 +151,9 @@ Explorer, change defaults, or disable process isolation to force a result.
 The v0.1.1 full-float thumbnail path rejected every HDR over 16 MP before decoding,
 including ordinary 8K environment maps. The bounded preview path removes that
 specific limitation without increasing the native process/input limits.
+The v0.1.2 EXR path still used that 16 MP full-float route; the current EXR
+candidate removes it through selected-channel strips. Neither change guarantees
+that every compression/layout or damaged file can produce a thumbnail.
 
 ## Official references
 

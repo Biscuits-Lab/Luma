@@ -2,16 +2,23 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 import threading
 from typing import Callable
 
+import numpy as np
 from PIL import Image, ImageOps
 from PySide6.QtCore import QObject, Signal
 
-from .decoders import ImageData, SUPPORTED_EXTENSIONS, RAW_EXTENSIONS, decode_image, render_rgba
+from .decoders import (DecodeCancelled, ImageData, SUPPORTED_EXTENSIONS,
+                       RAW_EXTENSIONS, decode_image, render_rgba)
+
+
+_PARALLEL_RENDER_MIN_PIXELS = 8_000_000
 
 
 class ByteCache:
@@ -149,6 +156,63 @@ class RenderedFrame:
         return self.rgba.nbytes
 
 
+def render_display_rgba(data, exposure, channel, tone, cancelled):
+    """Render exact full-resolution pixels with bounded parallel float bands.
+
+    NumPy releases the GIL for these transforms. Large scene-linear images can
+    use at most four render tasks, after native decoding has finished. Each task
+    holds only one small output band plus the renderer's temporary workspace;
+    the float source is shared read-only and the destination is allocated once.
+    Small/SDR images keep the cheaper serial path. There is no task per scanline
+    and no second full-size output or speculative background rendering.
+    """
+    workers = min(4, os.cpu_count() or 1)
+    if not data.linear or data.width * data.height < _PARALLEL_RENDER_MIN_PIXELS or workers == 1:
+        return render_rgba(data, exposure, channel, tone, cancelled=cancelled)
+    if cancelled():
+        raise DecodeCancelled('Image operation cancelled.')
+    output = np.empty((data.height, data.width, 4), dtype=np.uint8)
+    # At most one megapixel per task, including unusually wide source images.
+    rows = max(1, min(128, 1_048_576 // data.width))
+    stopped = threading.Event()
+    failures = []
+    failure_lock = threading.Lock()
+
+    def is_cancelled():
+        return stopped.is_set() or cancelled()
+
+    def render_bands(index):
+        try:
+            for start in range(index * rows, data.height, workers * rows):
+                if is_cancelled():
+                    raise DecodeCancelled('Image operation cancelled.')
+                block = ImageData(data.path, data.pixels[start:start + rows],
+                                  data.linear, data.metadata, data.channel_names)
+                output[start:start + rows] = render_rgba(
+                    block, exposure, channel, tone, cancelled=is_cancelled)
+        except Exception as error:
+            # Preserve the original error, rather than a sibling's secondary
+            # cancellation when one renderer fails parameter validation.
+            with failure_lock:
+                if not failures:
+                    failures.append(error)
+            stopped.set()
+            raise
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='Luma render') as executor:
+        # Exactly one task per thread; pending image requests remain solely in
+        # LatestWorker's replaceable slot. Cancellation joins only active bands.
+        try:
+            list(executor.map(render_bands, range(workers)))
+        except Exception:
+            if failures:
+                raise failures[0]
+            raise
+    if cancelled():
+        raise DecodeCancelled('Image operation cancelled.')
+    return output
+
+
 class ImageService:
     """Single-worker owned caches: decoded bytes plus separately bounded RGBA frames.
 
@@ -180,13 +244,19 @@ class ImageService:
         data = self.current_image if key == self.current_key else self.cache.get(key)
         if frame is None:
             if data is None:
+                if activate and key != self.current_key:
+                    # Navigation already cleared the old canvas. An uncached
+                    # 8K float source can occupy a GiB; release it before the
+                    # next native decode, rather than retaining two originals.
+                    # Same-key edits and idle prefetch preserve the active data.
+                    self.current_key, self.current_image = None, None
                 data = decode_image(path, cancelled=cancelled)
                 if cancelled() or self._key(path) != key:
                     return None
                 self.cache.put(key, data)
             if cancelled():
                 return None
-            rgba = render_rgba(data, exposure, channel, tone, cancelled=cancelled)
+            rgba = render_display_rgba(data, exposure, channel, tone, cancelled)
             if cancelled() or self._key(path) != key:
                 return None
             frame = RenderedFrame(rgba, data.width, data.height, data.linear,

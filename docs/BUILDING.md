@@ -57,10 +57,11 @@ The updater expects the exact Windows ZIP name and reads its SHA-256 from `SHA25
 
 ## Current development candidate
 
-`.github/workflows/thumbnail-validation.yml` validates the `feature/performance`
-branch as version 0.1.2. It never publishes a release. The exact commit must pass
+`.github/workflows/thumbnail-validation.yml` validates the `feature/exr-performance`
+branch as version 0.1.3. It never publishes a release. The exact commit must pass
 viewer/decoder regressions, 200% Qt scaling tests, native bridge tests, packaged
-viewer smoke, real required-surrogate extraction (including 4K/8K/16K HDR and
+viewer smoke (including a full 8192-square Unicode EXR), real required-surrogate
+extraction (including 4K/8K/16K HDR/EXR, EXR color/alpha probes and
 Applications\Luma.exe association lookup), and installer lifecycle checks.
 The candidate artifact contains setup EXE, portable ZIP, dependency-source ZIP,
 SHA256SUMS and diagnostic evidence. Publication is a separate, intentional step

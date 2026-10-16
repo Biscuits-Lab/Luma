@@ -75,7 +75,8 @@ Ctrl+O opens an image; Ctrl+Shift+O opens a folder. Left/Right browse, Home/End 
 
 ## Memory use
 
-Decoded navigation caching is bounded to 256 MiB, display-ready RGBA caching to 128 MiB, and filmstrip caching to 8 MiB. The active decoded image, Qt display pixels and temporary decoding/rendering arrays need additional memory. One bounded idle prefetch runs on the same worker for eligible JPEG/PNG/WebP images; foreground requests take priority and obsolete cooperative work stops. HDR/EXR/RAW are never speculatively decoded. Display transforms run in strips. See [measured performance and reproduction](docs/PERFORMANCE.md).
+Decoded navigation caching is bounded to 256 MiB, display-ready RGBA caching to 128 MiB, and filmstrip caching to 8 MiB. The active decoded image, Qt display pixels and temporary decoding/rendering arrays need additional memory. One bounded idle prefetch runs on the same worker for eligible JPEG/PNG/WebP images; foreground requests take priority and obsolete cooperative work stops. HDR/EXR/RAW are never speculatively decoded. Display transforms run in strips. See [measured performance and reproduction](docs/PERFORMANCE.md) and the
+[EXR-specific measurements and limits](docs/EXR_PERFORMANCE.md).
 
 ## Packaging and licensing
 

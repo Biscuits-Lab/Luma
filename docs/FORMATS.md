@@ -22,6 +22,30 @@ The native Radiance decoder reads supported RGBE `.hdr`/`.pic` images into float
 
 OpenEXR is decoded using the official OpenEXR Python binding. The supported viewing model is a **flat image with viewable color channels**. Floating-point radiance is tone-mapped for display. Deep data, arbitrary AOV/channel layouts, multipart compositing, texture arrays, and production color-management pipelines are outside this first version's guarantees. The decoder reports an explicit error where it cannot construct a viewable image.
 
+The EXR-specific full-resolution ceiling is 67,108,864 pixels, allowing an
+8192 × 8192 image; other viewer formats retain their existing ceilings. A full
+8K square float32 RGBA source alone occupies 1 GiB. Decode workspace is checked
+against the 1.5 GiB allowance; RGBA8 display pixels, Qt surfaces and caches need
+additional RAM. The viewer retains full-resolution float32 values for zoom/channel
+inspection. HALF samples convert exactly to float32; UINT channels can round above
+float32's exact integer range, as in earlier versions. Explorer uses a separate bounded preview path, described in
+[thumbnail limits](EXPLORER_THUMBNAILS.md), rather than decoding a full float image.
+
+EXR channel names and a filename do not establish whether a texture stores color,
+roughness, depth or other packed data. Luma preserves the decoded channel values
+and shows the selected channels in Details. Its default SDR view remains a
+scene-linear display transform with OpenEXR's associated-alpha convention; it
+does not guess a material mapping or color space from a filename. Channel
+inspection and exposure/tone-map controls are viewing tools, not a calibrated
+material-data editor. Deep, multipart and subsampled channels remain unsupported.
+
+The bounded reader uses `InputFile.channels` from the pinned official OpenEXR
+3.5.2 wheel, because the modern `File` interface materializes whole channel
+arrays. The upstream legacy adapter is deprecated but still shipped. Its use is
+covered by scanline/tiled, compression, offset, alpha and malformed-header tests;
+a future dependency upgrade must rerun those tests before changing this pin.
+See [the official Python API documentation](https://openexr.com/en/latest/python.html).
+
 A successfully decoded EXR is not evidence of color accuracy for a particular studio pipeline. No OCIO/ACES view transform, monitor calibration, HDR10 scRGB swapchain, mastering metadata or monitor-luminance control is provided.
 
 ## Camera RAW

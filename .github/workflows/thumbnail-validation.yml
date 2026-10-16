@@ -1,15 +1,15 @@
-name: Windows performance, thumbnail and installer validation
+name: Windows EXR, thumbnail and installer validation
 
 on:
   push:
-    branches: [feature/performance]
+    branches: [feature/exr-performance]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: luma-performance-validation
+  group: luma-exr-validation
   cancel-in-progress: false
 
 jobs:
@@ -55,23 +55,23 @@ jobs:
         run: ./.venv-build/Scripts/python.exe scripts/smoke_thumbnails.py
       - name: Collect dependency sources
         shell: pwsh
-        run: ./.venv-build/Scripts/python.exe scripts/prepare_source_material.py --version 0.1.2
+        run: ./.venv-build/Scripts/python.exe scripts/prepare_source_material.py --version 0.1.3
       - name: Package candidate ZIP and checksums
         shell: pwsh
-        run: ./.venv-build/Scripts/python.exe scripts/package_release.py --version 0.1.2
+        run: ./.venv-build/Scripts/python.exe scripts/package_release.py --version 0.1.3
       - name: Build current-user Windows installer
         shell: pwsh
         run: ./scripts/build_installer.ps1
       - name: Verify installer lifecycle on disposable runner
         shell: pwsh
-        run: ./scripts/test_installer.ps1 -Installer artifacts/Luma-0.1.2-windows-x64-setup.exe
+        run: ./scripts/test_installer.ps1 -Installer artifacts/Luma-0.1.3-windows-x64-setup.exe
       - name: Require successful Shell isolation before accepting candidate
         if: steps.thumbnails.outcome != 'success'
         shell: pwsh
         run: throw 'Required Shell thumbnail validation failed; candidate artifacts are withheld.'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: luma-0.1.2-windows-candidate
+          name: luma-0.1.3-windows-candidate
           path: artifacts/*
           if-no-files-found: error
           compression-level: 0

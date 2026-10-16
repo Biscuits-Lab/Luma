@@ -28,7 +28,7 @@ def main() -> int:
     smoke = json.loads((ROOT / "build/smoke-report.json").read_text(encoding="utf-8"))
     if smoke.get("platform") != "win32" or smoke.get("qt_platform") != "windows" or not smoke.get("raw_source"):
         raise RuntimeError("Native Windows packaged smoke, including real RAW, must pass first")
-    expected = {"empty-window", "smoke.png", "smoke.tga", "smoke.dds", "图像 测试.png", "smoke.hdr", "smoke.exr", "iss030e122639.NEF", "相机 测试.NEF"}
+    expected = {"empty-window", "smoke.png", "smoke.tga", "smoke.dds", "图像 测试.png", "smoke.hdr", "smoke.exr", "图像 8192-square.exr", "iss030e122639.NEF", "相机 测试.NEF"}
     passed = {r["fixture"] for r in smoke.get("results", []) if r["exit_code"] == 0}
     if not expected.issubset(passed):
         raise RuntimeError("Incomplete Windows packaged format checks")

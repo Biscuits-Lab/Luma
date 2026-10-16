@@ -15,8 +15,8 @@ Use Windows x64, the checked-in Python build environment and [official Inno Setu
 
 ```powershell
 ./scripts/build_windows.ps1
-./.venv-build/Scripts/python.exe scripts/prepare_source_material.py --version 0.1.2
-./.venv-build/Scripts/python.exe scripts/package_release.py --version 0.1.2
+./.venv-build/Scripts/python.exe scripts/prepare_source_material.py --version 0.1.3
+./.venv-build/Scripts/python.exe scripts/package_release.py --version 0.1.3
 ./scripts/build_installer.ps1
 # Optional explicit compiler location:
 # ./scripts/build_installer.ps1 -IsccPath 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
@@ -57,7 +57,7 @@ python -m unittest discover -s scripts -p test_installer_contract.py
 On an **ephemeral GitHub-hosted Windows runner only**:
 
 ```powershell
-./scripts/test_installer.ps1 -Installer artifacts/Luma-0.1.2-windows-x64-setup.exe
+./scripts/test_installer.ps1 -Installer artifacts/Luma-0.1.3-windows-x64-setup.exe
 ```
 
 The smoke script refuses developer desktops and self-hosted runners. It verifies per-user installation, Installed apps registration, launch, shortcut defaults, automatic HDR/Applications-route registration, foreign-provider conflict failure and retry, identical reinstall, rejection of modified payloads, automatic registration migration while the old real DLL is loaded, safe refusal of busy uninstall, cleanup of an old installed version's shell ownership, preservation of images/settings/defaults, and preservation of an unrelated portable registration during both reinstall and uninstall. It builds a second test-only package under the runner's temporary directory to exercise the versioned layout without altering source versions or public releases.

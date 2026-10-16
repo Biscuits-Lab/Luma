@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch the real bundled UI/decoders on small fixtures and a real RAW file."""
+"""Launch the bundled UI on format fixtures, real RAW and a full 8K-square EXR."""
 from __future__ import annotations
 import argparse
 import hashlib
@@ -16,6 +16,7 @@ from PIL import Image
 import OpenEXR
 
 ROOT = Path(__file__).resolve().parents[1]
+EXR_VIEWER_FIXTURE = "图像 8192-square.exr"
 RAW_NAME = "iss030e122639.NEF"
 RAW_URL = f"https://raw.githubusercontent.com/letmaik/rawpy/main/test/{RAW_NAME}"
 RAW_BLOB = "e03d193927a604de40fd0fd7a71e33fde878a0e1"
@@ -109,6 +110,15 @@ def prepare_fixtures(destination: Path, include_raw: bool = True) -> list[Path]:
     return files
 
 
+def prepare_exr_viewer_fixture(destination: Path) -> Path:
+    """Exercise the real packaged full-resolution 8192-square EXR route."""
+    from scripts.smoke_thumbnails import write_exr_thumbnail_fixture
+    path = destination / EXR_VIEWER_FIXTURE
+    write_exr_thumbnail_fixture(path, 8192, 8192, sample_type="FLOAT",
+                                compression="ZIP", channels=("R", "G", "B", "A"))
+    return path
+
+
 def configure_console_output() -> None:
     # Windows redirected consoles may use cp1252. Keep full Unicode paths in
     # the UTF-8 JSON report, while allowing logs to escape unsupported glyphs.
@@ -127,7 +137,9 @@ def main() -> int:
     exe = args.executable.resolve()
     if not exe.is_file():
         parser.error(f"Missing executable: {exe}")
+    sys.path.insert(0, str(ROOT))
     fixtures = prepare_fixtures(args.fixtures.resolve(), not args.skip_raw)
+    fixtures.append(prepare_exr_viewer_fixture(args.fixtures.resolve()))
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "windows" if sys.platform == "win32" else "offscreen"
     results = []

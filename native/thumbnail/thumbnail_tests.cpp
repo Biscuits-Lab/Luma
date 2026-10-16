@@ -5,13 +5,17 @@
 #include <shlobj.h>
 
 #include <atomic>
+#include <cstring>
 #include <cwchar>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <initializer_list>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "thumbnail_test_token.h"
 
@@ -23,6 +27,79 @@ using CanUnloadNow = HRESULT (STDAPICALLTYPE*)();
 
 void Require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+// Test-only expected probes, inherited by the standard-token surrogate
+// client. No production provider behavior or its resource limits are changed.
+void TestExpectedBitmap(HBITMAP bitmap) {
+    wchar_t path[32768]{};
+    const DWORD length = GetEnvironmentVariableW(
+        L"LUMA_THUMBNAIL_EXPECTED", path, ARRAYSIZE(path));
+    if (length == 0) return;
+    Require(length < ARRAYSIZE(path), "Expected bitmap path is too long");
+    std::ifstream expected{std::filesystem::path(path)};
+    std::string magic;
+    int width = 0, height = 0, count = 0;
+    expected >> magic >> width >> height >> count;
+    Require(expected.good() && magic == "LUMA_EXR_PROBES_1" &&
+                width > 0 && width <= 256 && height > 0 && height <= 256 &&
+                count > 0 && count <= 16,
+            "Invalid expected EXR pixel probes");
+    BITMAP description{};
+    Require(GetObjectW(bitmap, sizeof(description), &description) == sizeof(description) &&
+                description.bmWidth == width && description.bmHeight == height,
+            "EXR bitmap dimensions do not match expected preview");
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;  // Match Pillow's top-down probe rows.
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    std::vector<BYTE> pixels(static_cast<size_t>(width) * height * 4);
+    DIBSECTION section{};
+    if (GetObjectW(bitmap, sizeof(section), &section) == sizeof(section) &&
+            section.dsBm.bmBits && section.dsBm.bmBitsPixel == 32 &&
+            section.dsBm.bmWidthBytes >= width * 4) {
+        // Inspect the original alpha bytes whenever the handle is a DIB.
+        // GDI conversion is unnecessary and BI_RGB's spare high byte is not
+        // itself an alpha-conversion contract.
+        const auto* bits = static_cast<const BYTE*>(section.dsBm.bmBits);
+        for (int y = 0; y < height; ++y) {
+            const int row = section.dsBmih.biHeight < 0 ? y : height - 1 - y;
+            std::memcpy(pixels.data() + static_cast<size_t>(y) * width * 4,
+                        bits + static_cast<size_t>(row) * section.dsBm.bmWidthBytes,
+                        static_cast<size_t>(width) * 4);
+        }
+    } else {
+        HDC dc = GetDC(nullptr);
+        Require(dc != nullptr, "Cannot create bitmap inspection DC");
+        const int rows = GetDIBits(dc, bitmap, 0, static_cast<UINT>(height),
+                                 pixels.data(), &info, DIB_RGB_COLORS);
+        ReleaseDC(nullptr, dc);
+        Require(rows == height, "Cannot inspect EXR bitmap pixels");
+    }
+    for (int probe = 0; probe < count; ++probe) {
+        int x = 0, y = 0, bgra[4]{};
+        expected >> x >> y >> bgra[0] >> bgra[1] >> bgra[2] >> bgra[3];
+        Require(!expected.fail() && x >= 0 && x < width && y >= 0 && y < height,
+                "Invalid EXR pixel probe coordinates");
+        for (int channel = 0; channel < 4; ++channel) {
+            Require(bgra[channel] >= 0 && bgra[channel] <= 255,
+                    "Invalid EXR pixel probe value");
+            const int actual = pixels[(static_cast<size_t>(y) * width + x) * 4 + channel];
+            // The reference was decoded from the compressed file, so this
+            // tolerance covers only cache rounding, not DWA source loss.
+            const int difference = actual - bgra[channel];
+            if (difference < -2 || difference > 2) {
+                std::cerr << "EXR pixel mismatch x=" << x << " y=" << y
+                          << " channel=" << channel << " actual=" << actual
+                          << " expected=" << bgra[channel] << '\n';
+                throw std::runtime_error("EXR color/alpha probe mismatch");
+            }
+        }
+    }
+    std::cout << "exr_pixel_probes_ok count=" << count << '\n';
 }
 
 template<class T>
@@ -330,6 +407,10 @@ void TestRealHelper(GetClassObject get, const wchar_t* modeName,
 
     const LONG width = dib.dsBm.bmWidth;
     const LONG height = dib.dsBm.bmHeight;
+    if (valid) {
+        try { TestExpectedBitmap(bitmap); }
+        catch (...) { DeleteObject(bitmap); throw; }
+    }
     DeleteObject(bitmap);
 
     Require(valid, "Returned bitmap dimensions/type were invalid");
@@ -601,6 +682,7 @@ void TestSurrogate(const wchar_t* inputPath) {
                 description.bmBitsPixel == 32,
             "Surrogate bitmap dimensions/type were invalid");
     Require(alpha == WTSAT_ARGB, "Surrogate lost the alpha format");
+    TestExpectedBitmap(bitmap);
 
     // The cache owns this bitmap. Do not DeleteObject it or mutate its pixels.
     // The required-surrogate flag is enforced by Windows. This host PID is

@@ -10,9 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from io import BytesIO
 import math
+import os
 from pathlib import Path
 import re
 import struct
+import threading
 import warnings
 from typing import BinaryIO, Callable
 
@@ -29,6 +31,16 @@ MAX_DECODE_BYTES = 1536 * 1024 * 1024
 MAX_HEADER_BYTES = 65536
 MAX_ICC_BYTES = 4 * 1024 * 1024
 MAX_EXR_CHANNELS = 64
+MAX_EXR_PIXELS = 8192 * 8192  # Narrow EXR-only allowance for square 8K textures.
+MAX_EXR_PREVIEW_PIXELS = 16384 * 16384
+MAX_EXR_PREVIEW_EDGE = 1024
+MAX_EXR_PREVIEW_FILE_BYTES = 256 * 1024 * 1024
+MAX_EXR_STRIP_BYTES = 16 * 1024 * 1024
+MAX_EXR_NATIVE_BYTES = 384 * 1024 * 1024
+MAX_EXR_CHUNK_TABLE_BYTES = 16 * 1024 * 1024
+EXR_THREADS = min(4, max(1, os.cpu_count() or 1))
+_exr_configuration_lock = threading.Lock()
+_exr_configured = False
 # Thumbnails never allocate full-source float pixels. This separate ceiling
 # admits common 16K environment maps while bounding parsing work.
 MAX_RADIANCE_PREVIEW_PIXELS = 256_000_000
@@ -75,6 +87,7 @@ class ImageData:
     linear: bool
     metadata: dict[str, str] = field(default_factory=dict)
     channel_names: tuple[str, ...] = ('R', 'G', 'B', 'A')
+    _pixel_limit: int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.path = Path(self.path)
@@ -82,7 +95,8 @@ class ImageData:
                 or self.pixels.shape[2] != 4
                 or self.pixels.dtype not in (np.dtype('float32'), np.dtype('uint8'))):
             raise DecodeError('Image pixels must be an H×W×4 float32 or uint8 array.')
-        _check_size(self.width, self.height, self.pixels.dtype.itemsize * 4)
+        _check_size(self.width, self.height, self.pixels.dtype.itemsize * 4,
+                    pixel_limit=self._pixel_limit)
         self.pixels = np.ascontiguousarray(self.pixels)
 
     @property
@@ -98,14 +112,16 @@ class ImageData:
         return int(self.pixels.nbytes)
 
 
-def _check_size(width: int, height: int, bytes_per_pixel: int = 16) -> None:
+def _check_size(width: int, height: int, bytes_per_pixel: int = 16, *,
+                pixel_limit: int | None = None) -> None:
     width, height = int(width), int(height)
+    pixel_limit = MAX_PIXELS if pixel_limit is None else min(pixel_limit, MAX_EXR_PIXELS)
     if width <= 0 or height <= 0:
         raise DecodeError(f'Invalid image dimensions: {width} × {height}.')
-    if width > MAX_DIMENSION or height > MAX_DIMENSION or width * height > MAX_PIXELS:
+    if width > MAX_DIMENSION or height > MAX_DIMENSION or width * height > pixel_limit:
         raise ImageTooLargeError(
             f'Image is too large: {width:,} × {height:,}. The safety limit is '
-            f'{MAX_PIXELS:,} pixels and {MAX_DIMENSION:,} pixels per side.')
+            f'{pixel_limit:,} pixels and {MAX_DIMENSION:,} pixels per side.')
     if width * height * bytes_per_pixel > MAX_DECODE_BYTES:
         raise ImageTooLargeError(
             f'Image requires too much decoded memory (limit '
@@ -145,7 +161,7 @@ def decode_image(path: Path, *, cancelled: Callable[[], bool] | None = None) -> 
         if suffix in RAW_EXTENSIONS:
             result = _decode_raw(path)
         elif suffix == '.exr':
-            result = _decode_exr(path)
+            result = _decode_exr(path, cancelled=cancelled)
         elif suffix in {'.hdr', '.rgbe', '.pic'}:
             result = _decode_radiance(path, cancelled=cancelled)
         elif suffix in PILLOW_EXTENSIONS:
@@ -491,85 +507,364 @@ def decode_radiance_thumbnail(path: Path, edge: int, *,
         raise DecodeError(f'Could not read {path.name}: {_limited_text(exc, 300)}') from exc
 
 
-def _decode_exr(path: Path) -> ImageData:
+def _configure_exr():
+    """Configure the pinned official library once, before opening native files."""
+    global _exr_configured
     try:
         import OpenEXR
     except ImportError as exc:
         raise UnsupportedImageError('OpenEXR support is not installed. Install the OpenEXR package.') from exc
-    # Recent official wheels enforce these limits inside the native parser too.
-    if hasattr(OpenEXR, 'setMaxImageSize'):
-        OpenEXR.setMaxImageSize(MAX_DIMENSION, MAX_DIMENSION)
-        OpenEXR.setMaxTileSize(4096, 4096)
-    with OpenEXR.File(str(path), separate_channels=True, header_only=True) as preview:
-        if len(preview.parts) != 1:
-            raise UnsupportedImageError('Multipart EXR is not supported. Export a single flat RGB(A) part.')
-        header = dict(preview.header())
-        storage = header.get('type')
-        if storage in (OpenEXR.deepscanline, OpenEXR.deeptile):
-            raise UnsupportedImageError('Deep EXR is not supported. Flatten the image to a regular RGB(A) EXR.')
-        if storage not in (OpenEXR.scanlineimage, OpenEXR.tiledimage):
-            raise UnsupportedImageError(f'Unsupported EXR storage layout: {storage}.')
-        minimum, maximum = header['dataWindow']
-        width = int(maximum[0]) - int(minimum[0]) + 1
-        height = int(maximum[1]) - int(minimum[1]) + 1
-        descriptors = header['channels']
-        if not descriptors or len(descriptors) > MAX_EXR_CHANNELS:
-            raise ImageTooLargeError(f'EXR must contain between 1 and {MAX_EXR_CHANNELS} channels.')
-        _check_size(width, height, 16 + 4 * len(descriptors))
-        for descriptor in descriptors:
-            if descriptor.xSampling != 1 or descriptor.ySampling != 1:
-                raise UnsupportedImageError('Subsampled EXR channels are not supported. Export full-resolution channels.')
-    with OpenEXR.File(str(path), separate_channels=True) as source:
-        if len(source.parts) != 1:
-            raise DecodeError('EXR file changed while it was being read.')
-        channels = source.channels()
-        names = tuple(sorted(channels))
-        # Favor the unlayered beauty channels, then a complete named RGB layer.
-        prefixes = sorted({name.rsplit('.', 1)[0] + '.' for name in names if '.' in name})
-        prefix = next((candidate for candidate in ('', *prefixes)
-                       if all(candidate + color in channels for color in ('R', 'G', 'B'))), None)
-        pixels = np.zeros((height, width, 4), dtype=np.float32)
-        pixels[..., 3] = 1.0
-        selected: list[str] = []
-        if prefix is not None:
-            selected = [prefix + color for color in ('R', 'G', 'B')]
-            for index, name in enumerate(selected):
-                array = channels[name].pixels
-                if array.dtype == object or array.shape != (height, width):
-                    raise UnsupportedImageError('EXR channel has unsupported deep/subsampled data.')
-                pixels[..., index] = array
-        else:
-            name = next((name for name in ('Y', 'R', 'G', 'B', *names) if name in channels and name != 'A'), None)
-            if name is None:
-                name = 'A' if 'A' in channels else names[0]
-            prefix = name.rsplit('.', 1)[0] + '.' if '.' in name else ''
-            array = channels[name].pixels
-            if array.dtype == object or array.shape != (height, width):
-                raise UnsupportedImageError('EXR channel has unsupported deep/subsampled data.')
-            pixels[..., :3] = array[..., None]
-            selected = [name]
-        alpha_name = prefix + 'A'
-        if alpha_name in channels:
-            alpha = channels[alpha_name].pixels
-            if alpha.dtype == object or alpha.shape != (height, width):
-                raise UnsupportedImageError('EXR alpha channel has unsupported data.')
-            pixels[..., 3] = alpha
-        types = ', '.join(f'{name}: {channels[name].pixels.dtype}' for name in names)
-        metadata = {
-            'Format': 'OpenEXR', 'Decoder': f'OpenEXR {OpenEXR.__version__}',
-            'Source depth': _limited_text(types, 1000), 'Decoded depth': '32-bit floating-point RGBA',
-            'Color profile': 'Assumed linear sRGB; EXR chromaticities are not transformed',
-            'Alpha mode': ('premultiplied (OpenEXR convention)' if selected != [alpha_name] else 'straight') if alpha_name in channels else 'opaque',
-            'Channels': ', '.join(names), 'Displayed channels': ', '.join(selected),
-            'Storage': str(header.get('type')), 'Compression': str(header.get('compression')),
-            'Data window': f'{tuple(map(int, minimum))}–{tuple(map(int, maximum))}',
-            'Limitations': 'Single flat part; only one RGB/Y/scalar layer displayed; no chromaticity conversion or HDR monitor output',
-        }
-        for key in ('chromaticities', 'owner', 'comments', 'capDate', 'pixelAspectRatio', 'displayWindow'):
-            if key in header:
-                metadata[f'EXR {key}'] = _limited_text(header[key])
-        return ImageData(path, pixels, True, metadata)
+    with _exr_configuration_lock:
+        if not _exr_configured:
+            # The selected-channel adapter was allocation-hardened in 3.4.3;
+            # the 3.5 API also supplies native image/tile safety ceilings.
+            if not all(hasattr(OpenEXR, name) for name in
+                       ('InputFile', 'setMaxImageSize', 'setMaxTileSize', 'set_global_thread_count')):
+                raise UnsupportedImageError('EXR decoding requires the pinned OpenEXR 3.5.2 package.')
+            OpenEXR.setMaxImageSize(MAX_DIMENSION, MAX_DIMENSION)
+            OpenEXR.setMaxTileSize(4096, 4096)
+            OpenEXR.set_global_thread_count(EXR_THREADS)
+            _exr_configured = True
+    return OpenEXR
 
+
+def _exr_file_stamp(path: Path) -> tuple[int, int, int, int]:
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _bounded_exr_header(path: Path) -> bytes:
+    """Bound header metadata before native parsing; never decode pixel blocks.
+
+    Attribute payloads are skipped, not interpreted here. All actual EXR
+    parsing and decompression remains in the official OpenEXR library.
+    """
+    with path.open('rb') as stream:
+        header = stream.read(MAX_HEADER_BYTES + 1)
+    if len(header) < 8 or header[:4] != b'\x76\x2f\x31\x01':
+        raise DecodeError('Not an OpenEXR image (missing signature).')
+    version = struct.unpack_from('<I', header, 4)[0]
+    if version & 0x1000:
+        raise UnsupportedImageError('Multipart EXR is not supported. Export a single flat RGB(A) part.')
+    if version & 0x800:
+        raise UnsupportedImageError('Deep EXR is not supported. Flatten the image to a regular RGB(A) EXR.')
+    cursor = 8
+    while cursor < len(header):
+        if header[cursor] == 0:
+            return header[:cursor + 1]
+        for _ in range(2):  # attribute name and type, each at most 255 bytes
+            end = header.find(b'\0', cursor, min(cursor + 256, len(header)))
+            if end < 0:
+                raise DecodeError('Invalid or truncated EXR header attribute.')
+            cursor = end + 1
+        if cursor + 4 > len(header):
+            raise DecodeError('Truncated EXR header attribute size.')
+        count = struct.unpack_from('<I', header, cursor)[0]
+        cursor += 4 + count
+        if cursor >= MAX_HEADER_BYTES:
+            raise ImageTooLargeError('EXR header exceeds the 64 KiB safety limit.')
+    raise DecodeError('Truncated EXR header.')
+
+
+def _check_exr_chunk_table(header: bytes, *, preview: bool) -> None:
+    """Validate allocation-relevant attributes before constructing InputFile."""
+    attributes = {}
+    cursor = 8
+    while header[cursor]:
+        end = header.index(b'\0', cursor)
+        name = header[cursor:end]
+        cursor = end + 1
+        end = header.index(b'\0', cursor)
+        kind = header[cursor:end]
+        cursor = end + 1
+        count = struct.unpack_from('<I', header, cursor)[0]
+        cursor += 4
+        if name in attributes:
+            raise DecodeError('EXR contains duplicate header attributes.')
+        attributes[name] = (kind, header[cursor:cursor + count])
+        cursor += count
+    kind, compression = attributes.get(b'compression', (b'', b''))
+    if kind != b'compression' or len(compression) != 1 or compression[0] > 11:
+        raise UnsupportedImageError('Unsupported or invalid EXR compression method.')
+    if b'type' in attributes:
+        kind, storage = attributes[b'type']
+        if kind != b'string' or storage not in (b'scanlineimage', b'tiledimage'):
+            if storage in (b'deepscanline', b'deeptile'):
+                raise UnsupportedImageError('Deep EXR is not supported. Flatten the image first.')
+            raise UnsupportedImageError('Unsupported EXR storage layout.')
+    kind, channels = attributes.get(b'channels', (b'', b''))
+    if kind != b'chlist':
+        raise DecodeError('EXR has an invalid or missing channel list.')
+    cursor, channel_count = 0, 0
+    while cursor < len(channels) and channels[cursor]:
+        end = channels.find(b'\0', cursor, min(cursor + 256, len(channels)))
+        if end < 0 or end + 17 > len(channels):
+            raise DecodeError('EXR has a truncated channel description.')
+        sample_type, x_sampling, y_sampling = struct.unpack_from('<i4xii', channels, end + 1)
+        if sample_type not in (0, 1, 2):
+            raise UnsupportedImageError('Unsupported EXR channel sample type.')
+        if x_sampling != 1 or y_sampling != 1:
+            raise UnsupportedImageError('Subsampled EXR channels are not supported. Export full-resolution channels.')
+        channel_count += 1
+        if channel_count > MAX_EXR_CHANNELS:
+            raise ImageTooLargeError(f'EXR must contain between 1 and {MAX_EXR_CHANNELS} channels.')
+        cursor = end + 17
+    if not channel_count:
+        raise ImageTooLargeError(f'EXR must contain between 1 and {MAX_EXR_CHANNELS} channels.')
+    if cursor != len(channels) - 1 or channels[cursor] != 0:
+        raise DecodeError('EXR has an invalid channel-list terminator.')
+    kind, window = attributes.get(b'dataWindow', (b'', b''))
+    if kind != b'box2i' or len(window) != 16:
+        raise DecodeError('EXR has an invalid or missing data window.')
+    x0, y0, x1, y1 = struct.unpack('<4i', window)
+    width, height = x1 - x0 + 1, y1 - y0 + 1
+    _check_exr_dimensions(width, height, preview=preview)
+    if b'tiles' not in attributes:
+        return  # At most 32,768 scanline offsets under the dimension limit.
+    kind, tile = attributes[b'tiles']
+    if kind != b'tiledesc' or len(tile) != 9:
+        raise DecodeError('EXR has an invalid tile description.')
+    tw, th, mode = struct.unpack('<IIB', tile)
+    if not (0 < tw <= 4096 and 0 < th <= 4096):
+        raise ImageTooLargeError('EXR tile dimensions exceed the safety limit.')
+    if mode & 0xEF not in (0, 1, 2):
+        raise UnsupportedImageError('EXR has an unsupported tile level mode.')
+    def levels(size):
+        result = [size]
+        while result[-1] > 1:
+            result.append((result[-1] + bool(mode & 0x10)) // 2)
+        return result
+    widths, heights = levels(width), levels(height)
+    if mode & 0xF == 0:
+        sizes = [(width, height)]
+    elif mode & 0xF == 1:
+        sizes = [(widths[min(i, len(widths) - 1)], heights[min(i, len(heights) - 1)])
+                 for i in range(max(len(widths), len(heights)))]
+    else:
+        sizes = [(w, h) for w in widths for h in heights]
+    offsets = sum(((w + tw - 1) // tw) * ((h + th - 1) // th) for w, h in sizes)
+    if offsets * 8 > MAX_EXR_CHUNK_TABLE_BYTES:
+        raise ImageTooLargeError('EXR tile offset table exceeds the native memory safety limit.')
+
+
+def _check_exr_dimensions(width: int, height: int, *, preview: bool) -> None:
+    if preview:
+        if not (0 < width <= MAX_DIMENSION and 0 < height <= MAX_DIMENSION
+                and width * height <= MAX_EXR_PREVIEW_PIXELS):
+            raise ImageTooLargeError('EXR dimensions exceed the thumbnail safety limit.')
+    else:
+        _check_size(width, height, 16, pixel_limit=MAX_EXR_PIXELS)
+
+
+def _exr_channel_selection(names: tuple[str, ...]) -> tuple[list[str], str]:
+    prefixes = sorted({name.rsplit('.', 1)[0] + '.' for name in names if '.' in name})
+    prefix = next((candidate for candidate in ('', *prefixes)
+                   if all(candidate + color in names for color in ('R', 'G', 'B'))), None)
+    if prefix is not None:
+        selected = [prefix + color for color in ('R', 'G', 'B')]
+    else:
+        name = next((name for name in ('Y', 'R', 'G', 'B', *names)
+                     if name in names and name != 'A'), None)
+        if name is None:
+            name = 'A' if 'A' in names else names[0]
+        prefix = name.rsplit('.', 1)[0] + '.' if '.' in name else ''
+        selected = [name]
+    return selected, prefix + 'A'
+
+
+def _exr_layout(header: dict, *, preview: bool) -> tuple:
+    storage = header.get('type', b'tiledimage' if 'tiles' in header else b'scanlineimage')
+    if isinstance(storage, bytes):
+        storage = storage.decode('ascii', errors='replace')
+    if storage in ('deepscanline', 'deeptile'):
+        raise UnsupportedImageError('Deep EXR is not supported. Flatten the image to a regular RGB(A) EXR.')
+    if storage not in ('scanlineimage', 'tiledimage'):
+        raise UnsupportedImageError(f'Unsupported EXR storage layout: {storage}.')
+    window = header['dataWindow']
+    minimum = (int(window.min.x), int(window.min.y))
+    maximum = (int(window.max.x), int(window.max.y))
+    width, height = maximum[0] - minimum[0] + 1, maximum[1] - minimum[1] + 1
+    _check_exr_dimensions(width, height, preview=preview)
+    descriptors = header['channels']
+    if not descriptors or len(descriptors) > MAX_EXR_CHANNELS:
+        raise ImageTooLargeError(f'EXR must contain between 1 and {MAX_EXR_CHANNELS} channels.')
+    dtypes = {}
+    for name, descriptor in descriptors.items():
+        if descriptor.xSampling != 1 or descriptor.ySampling != 1:
+            raise UnsupportedImageError('Subsampled EXR channels are not supported. Export full-resolution channels.')
+        pixel_type = int(descriptor.type.v)
+        if pixel_type not in (0, 1, 2):
+            raise UnsupportedImageError('Unsupported EXR channel sample type.')
+        dtypes[name] = np.dtype({0: 'uint32', 1: 'float16', 2: 'float32'}[pixel_type])
+    names = tuple(sorted(descriptors))
+    selected, alpha_name = _exr_channel_selection(names)
+    read_names = list(dict.fromkeys([*selected, *([alpha_name] if alpha_name in names else [])]))
+    # Compression units are native OpenEXR chunks, not Luma compression code.
+    compression = int(header['compression'].v)
+    chunk_rows = {0: 1, 1: 1, 2: 1, 3: 16, 4: 32, 5: 16,
+                  6: 32, 7: 32, 8: 32, 9: 256, 10: 256, 11: 32}.get(compression)
+    if chunk_rows is None:
+        raise UnsupportedImageError('Unsupported EXR compression method.')
+    sample_bytes = sum(dtype.itemsize for dtype in dtypes.values())
+    native_chunk_bytes = width * min(height, chunk_rows) * sample_bytes
+    tile_cache_bytes = 0
+    if storage == 'tiledimage':
+        tiles = header['tiles']
+        if not (0 < tiles.xSize <= 4096 and 0 < tiles.ySize <= 4096):
+            raise ImageTooLargeError('EXR tile dimensions exceed the safety limit.')
+        chunk_rows = int(tiles.ySize)
+        native_chunk_bytes = min(width, tiles.xSize) * min(height, tiles.ySize) * sample_bytes
+        # Official InputFile's tiled adapter caches one row of selected tiles.
+        tile_cache_bytes = width * tiles.ySize * sum(dtypes[n].itemsize for n in read_names)
+    # Conservative codec scratch/packed/unpacked allowance per worker. The
+    # Explorer bridge's 768 MiB Windows job limit remains the hard backstop.
+    native_estimate = (native_chunk_bytes * EXR_THREADS * 4 + tile_cache_bytes
+                       + MAX_EXR_CHUNK_TABLE_BYTES)
+    if native_estimate > MAX_EXR_NATIVE_BYTES:
+        raise ImageTooLargeError('EXR compression workspace exceeds the bounded decoder safety limit.')
+    if not preview and width * height * 16 + MAX_EXR_STRIP_BYTES + native_estimate > MAX_DECODE_BYTES:
+        raise ImageTooLargeError('EXR decoded pixels and compression workspace exceed the memory safety limit.')
+    return (width, height, minimum, maximum, names, selected, alpha_name,
+            read_names, dtypes, chunk_rows, storage, native_estimate)
+
+
+def _exr_metadata(header: dict, layout: tuple, version: str) -> dict[str, str]:
+    (width, height, minimum, maximum, names, selected, alpha_name,
+     read_names, dtypes, chunk_rows, storage, native_estimate) = layout
+    types = ', '.join(f'{name}: {dtypes[name]}' for name in names)
+    metadata = {
+        'Format': 'OpenEXR', 'Decoder': f'OpenEXR {version} (selected-channel strips)',
+        'Source depth': _limited_text(types, 1000), 'Decoded depth': '32-bit floating-point RGBA',
+        'Color profile': 'Assumed linear sRGB; EXR chromaticities are not transformed',
+        'Alpha mode': ('premultiplied (OpenEXR convention)' if selected != [alpha_name] else 'straight') if alpha_name in names else 'opaque',
+        'Channels': ', '.join(names), 'Displayed channels': ', '.join(selected),
+        'Storage': storage, 'Compression': str(header.get('compression')),
+        'Data window': f'{minimum}–{maximum}',
+        'Limitations': 'Single flat part; only one RGB/Y/scalar layer displayed; no chromaticity conversion or HDR monitor output',
+    }
+    for key in ('chromaticities', 'owner', 'comments', 'capDate', 'pixelAspectRatio', 'displayWindow'):
+        if key in header:
+            metadata[f'EXR {key}'] = _limited_text(header[key])
+    return metadata
+
+
+def _exr_read_ranges(sample_y: np.ndarray, strip_rows: int, chunk_rows: int):
+    """Batch adjacent compression chunks, skipping unused distant chunks."""
+    first = 0
+    while first < len(sample_y):
+        start = int(sample_y[first])
+        stop = first + 1
+        while stop < len(sample_y):
+            y = int(sample_y[stop])
+            if y - start >= strip_rows or y // chunk_rows > int(sample_y[stop - 1]) // chunk_rows + 1:
+                break
+            stop += 1
+        yield first, stop, start, int(sample_y[stop - 1])
+        first = stop
+
+
+def _decode_exr(path: Path, *, cancelled: Callable[[], bool] | None = None,
+                preview_edge: int | None = None) -> ImageData:
+    """Read selected channels through official, allocation-bounded strip I/O.
+
+    OpenEXR.File eagerly allocates every channel. The pinned 3.5.2 release's
+    InputFile adapter exposes the official scanline reader, including tiled
+    input, without those whole-source channel allocations. HALF/FLOAT/UINT
+    are read in their native sample types and converted exactly as before.
+    """
+    path = Path(path)
+    _check_cancelled(cancelled)
+    original_stamp = _exr_file_stamp(path)
+    file_limit = min(MAX_FILE_BYTES, MAX_EXR_PREVIEW_FILE_BYTES) if preview_edge is not None else MAX_FILE_BYTES
+    if original_stamp[2] > file_limit:
+        raise ImageTooLargeError('EXR file exceeds the compressed input safety limit.')
+    header_bytes = _bounded_exr_header(path)
+    _check_exr_chunk_table(header_bytes, preview=preview_edge is not None)
+    OpenEXR = _configure_exr()
+    source = OpenEXR.InputFile(str(path))
+    try:
+        header = source.header()
+        layout = _exr_layout(header, preview=preview_edge is not None)
+        if _exr_file_stamp(path) != original_stamp or _bounded_exr_header(path) != header_bytes:
+            raise DecodeError('EXR file changed while it was being read.')
+        (width, height, minimum, maximum, names, selected, alpha_name,
+         read_names, dtypes, chunk_rows, storage, native_estimate) = layout
+        if preview_edge is None:
+            out_width, out_height = width, height
+        else:
+            scale = min(1.0, preview_edge / max(width, height))
+            out_width, out_height = max(1, round(width * scale)), max(1, round(height * scale))
+        pixels = np.empty((out_height, out_width, 4), dtype=np.float32)
+        pixels[..., 3] = 1.0
+        sample_x = np.minimum(width - 1, ((np.arange(out_width) + .5) * width / out_width).astype(np.int64))
+        sample_y = np.minimum(height - 1, ((np.arange(out_height) + .5) * height / out_height).astype(np.int64))
+        bytes_per_row = width * sum(dtypes[name].itemsize for name in read_names)
+        strip_rows = max(1, min(512, MAX_EXR_STRIP_BYTES // bytes_per_row))
+        for first, stop, y0, y1 in _exr_read_ranges(sample_y, strip_rows, chunk_rows):
+            _check_cancelled(cancelled)
+            # Keyword bounds are absolute dataWindow coordinates; a negative
+            # or nonzero origin never shifts the returned NumPy pixel array.
+            buffers = source.channels(read_names, scanLine1=minimum[1] + y0,
+                                      scanLine2=minimum[1] + y1)
+            if len(buffers) != len(read_names):
+                raise DecodeError('OpenEXR returned an incomplete channel set.')
+            for name, buffer in zip(read_names, buffers):
+                expected = (y1 - y0 + 1) * width * dtypes[name].itemsize
+                if len(buffer) != expected:
+                    raise DecodeError('OpenEXR returned an invalid strip size.')
+                array = np.frombuffer(buffer, dtype=dtypes[name]).reshape(y1 - y0 + 1, width)
+                if preview_edge is not None:
+                    array = array[np.ix_(sample_y[first:stop] - y0, sample_x)]
+                if name in selected:
+                    if len(selected) == 1:
+                        pixels[first:stop, :, :3] = array[..., None]
+                    else:
+                        pixels[first:stop, :, selected.index(name)] = array
+                if name == alpha_name:
+                    pixels[first:stop, :, 3] = array
+            # Do not retain the prior buffers during the next native read.
+            del array, buffer, buffers
+        _check_cancelled(cancelled)
+        if _exr_file_stamp(path) != original_stamp:
+            raise DecodeError('EXR file changed while it was being read.')
+        metadata = _exr_metadata(header, layout, OpenEXR.__version__)
+        if original_stamp[2] > MAX_EXR_PREVIEW_FILE_BYTES:
+            _add_limitation(metadata, 'Explorer thumbnails are unavailable above the 256 MiB compressed-file limit')
+        if preview_edge is not None:
+            metadata['Source dimensions'] = f'{width:,} × {height:,}'
+            metadata['Thumbnail'] = 'Bounded center-sampled selected-channel strips; no embedded preview'
+        return ImageData(path, pixels, True, metadata, _pixel_limit=MAX_EXR_PIXELS)
+    finally:
+        source.close()
+
+
+def decode_exr_thumbnail(path: Path, edge: int, *,
+                         cancelled: Callable[[], bool] | None = None) -> ImageData:
+    """Return a bounded linear EXR preview; never allocate whole-source pixels.
+
+    The native Explorer bridge also enforces its unchanged 256 MiB input,
+    768 MiB job memory and 10-second deadline. These Python checks do not
+    replace those hard process limits, nor do they expand full-viewer limits.
+    """
+    path = Path(path).expanduser()
+    try:
+        _check_cancelled(cancelled)
+        if isinstance(edge, bool) or not isinstance(edge, int) or not 1 <= edge <= MAX_EXR_PREVIEW_EDGE:
+            raise ValueError('EXR thumbnail edge must be an integer between 1 and 1024.')
+        if not path.is_file():
+            raise DecodeError(f'Image file does not exist or is not a regular file: {path.name}')
+        size = path.stat().st_size
+        if not size:
+            raise DecodeError('The image file is empty.')
+        if size > min(MAX_FILE_BYTES, MAX_EXR_PREVIEW_FILE_BYTES):
+            raise ImageTooLargeError('EXR file exceeds the 256 MiB thumbnail input limit.')
+        return _decode_exr(path, cancelled=cancelled, preview_edge=edge)
+    except (DecodeError, DecodeCancelled):
+        raise
+    except MemoryError as exc:
+        raise ImageTooLargeError('There is not enough memory to decode this EXR preview safely.') from exc
+    except (OSError, ValueError, RuntimeError, EOFError, struct.error, OverflowError) as exc:
+        raise DecodeError(f'Could not read {path.name}: {_limited_text(exc, 300)}') from exc
 
 def _decode_raw(path: Path) -> ImageData:
     try:

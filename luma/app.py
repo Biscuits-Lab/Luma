@@ -658,7 +658,12 @@ class ViewerWindow(QMainWindow):
         self.busy_timer.stop()
         rgba = result['rgba']
         h, w = rgba.shape[:2]
-        image = QImage(rgba.data, w, h, rgba.strides[0], QImage.Format.Format_RGBA8888).copy()
+        # Make the owning native-format image in one pass. Copying RGBA first
+        # made an extra full-size allocation before QPixmap converted the same
+        # pixels to its premultiplied format. This conversion also detaches from
+        # the worker/cache buffer, so the canvas never borrows ndarray storage.
+        image = QImage(rgba.data, w, h, rgba.strides[0], QImage.Format.Format_RGBA8888).convertToFormat(
+            QImage.Format.Format_ARGB32_Premultiplied)
         self.canvas.set_image(image, reset=self._new_image)
         self._new_image = False
         self.displayed_path = self.path

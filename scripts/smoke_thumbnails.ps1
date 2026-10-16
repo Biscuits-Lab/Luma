@@ -69,6 +69,8 @@ $user = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
 )
 $mutex = [Threading.Mutex]::new($false, "Local\LumaThumbnailCi")
 $locked = $false
+$priorExpectedBitmap = $env:LUMA_THUMBNAIL_EXPECTED
+Remove-Item Env:LUMA_THUMBNAIL_EXPECTED -ErrorAction SilentlyContinue
 
 if (-not ("LumaThumbCi.Native" -as [type])) {
     Add-Type @'
@@ -211,12 +213,14 @@ import zlib
 root, destination, manifest = map(Path, sys.argv[1:])
 sys.path.insert(0, str(root))
 from scripts.smoke_bundle import prepare_fixtures, prepare_hdr_thumbnail_fixtures, RAW_BLOB, RAW_NAME, RAW_URL
+from scripts.smoke_thumbnails import prepare_exr_thumbnail_fixtures, write_exr_thumbnail_expectations
 
 expected_raw = "e03d193927a604de40fd0fd7a71e33fde878a0e1"
 if RAW_BLOB != expected_raw:
     raise RuntimeError("RAW fixture pin changed; review before accepting it")
 files = prepare_fixtures(destination, include_raw=True)
 files += prepare_hdr_thumbnail_fixtures(destination)
+files += prepare_exr_thumbnail_fixtures(destination)
 # The content-aware executable association must cover common JPEG as well.
 from PIL import Image
 jpeg = destination / "common-image.jpg"
@@ -251,11 +255,17 @@ for path in [alpha, *files]:
     if not path.is_file():
         raise RuntimeError(f"Missing fixture: {path}")
     mode = suffix_modes[path.suffix.lower()]  # Unknown formats fail, not skip.
+    expected_bitmap = None
+    if mode == "exr":
+        expected = manifest.parent / (path.stem + ".expected-bgra.txt")
+        write_exr_thumbnail_expectations(path, expected)
+        expected_bitmap = str(expected.resolve())
     cases.append({
         "path": str(path.resolve()),
         "mode": mode,
         "expect_alpha": path == alpha,
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "expected_bitmap": expected_bitmap,
     })
 manifest.write_text(json.dumps({
     "raw_source": RAW_URL, "raw_git_blob": RAW_BLOB, "cases": cases,
@@ -326,6 +336,15 @@ manifest.write_text(json.dumps({
         $index++
         $source = Get-Item -LiteralPath $case.path
         $label = "{0:d2}-{1}" -f $index, $case.mode
+        if ($case.mode -eq "exr") {
+            if (-not $case.expected_bitmap -or
+                -not [IO.File]::Exists([string]$case.expected_bitmap)) {
+                throw "Missing required EXR pixel expectations: $($case.path)"
+            }
+            $env:LUMA_THUMBNAIL_EXPECTED = [string]$case.expected_bitmap
+        } else {
+            Remove-Item Env:LUMA_THUMBNAIL_EXPECTED -ErrorAction SilentlyContinue
+        }
         # Preserve Unicode stems while using the disposable mode association.
         $copy = Join-Path $work (
             "$index-$($source.BaseName)$($extensions[$case.mode])")
@@ -369,6 +388,11 @@ catch {
     $failures.Add($_.Exception.Message)
 }
 finally {
+    if ($null -ne $priorExpectedBitmap) {
+        $env:LUMA_THUMBNAIL_EXPECTED = $priorExpectedBitmap
+    } else {
+        Remove-Item Env:LUMA_THUMBNAIL_EXPECTED -ErrorAction SilentlyContinue
+    }
     # Only roots created after absence checks are eligible for removal.
     for ($i = $ownedKeys.Count - 1; $i -ge 0; $i--) {
         try { $user.DeleteSubKeyTree($ownedKeys[$i], $false) }

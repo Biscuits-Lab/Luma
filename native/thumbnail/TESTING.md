@@ -43,8 +43,22 @@ persistent installer-registration tests. The Python entry point launches the
 PowerShell 7.2 script with the current Python interpreter. It uses the built harness and bundle,
 prepares the hash-pinned fixture set, and covers PNG/JPEG, HDR, EXR, real NEF,
 a Unicode source name, the explicit alpha fixture, and compressible synthetic
-4K/8K/16K HDR environment-map dimensions. Those large fixtures exercise the
+4K/8K/16K HDR environment-map dimensions, plus six bounded-strip generated
+EXRs covering HALF/FLOAT, ZIP/PIZ/DWAA, RGB(A), layered RGB(A), and Y. EXR
+dimensions include 8K-square textures and the exact 16K-square preview limit;
+one EXR filename contains Unicode and spaces. Those large fixtures exercise the
 unchanged ten-second/768-MiB worker envelope; they are not worst-case benchmarks.
+
+Every EXR case also requires sixteen interior BGRA/alpha probes in all three
+native routes. The Python preparation step decodes each compressed file to
+record its actual displayed values (DWA is lossy), then supplies the bounded
+probe file through the test-only `LUMA_THUMBNAIL_EXPECTED` environment variable.
+The standard-token surrogate client inherits that variable. Probe files are
+retained with the manifest and diagnostic logs. Independent Python tests check
+known source bands, channel selection, alpha unpremultiplication, and the full
+small HALF/FLOAT × ZIP/PIZ/DWAA × channel-layout matrix. This verifies synthetic
+fixtures only; a private user sample and manual Explorer inspection remain
+separate validation steps.
 
 The script refuses existing provider CLSID and Applications\\Luma.exe registrations.
 It registers only previously absent provider CLSIDs, that owned application key,

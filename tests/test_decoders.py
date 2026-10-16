@@ -304,7 +304,7 @@ def test_exr_dimension_checked_header_only(tmp_path, monkeypatch):
     path = tmp_path / 'large.exr'
     with exr.File({}, {'Y': np.ones((3, 8), dtype=np.float32)}) as source:
         source.write(str(path))
-    monkeypatch.setattr(d, 'MAX_PIXELS', 20)
+    monkeypatch.setattr(d, 'MAX_EXR_PIXELS', 20)
     with pytest.raises(d.ImageTooLargeError):
         d.decode_image(path)
 

@@ -79,15 +79,24 @@ def _decoder_limits():
             setattr(decoders, name, value)
 
 
-def _linear_or_high_precision(path, edge, *, exr=False):
+def _linear_or_high_precision(path, edge):
     from PIL import Image
     with _decoder_limits() as decoders:
-        # The native bridge deliberately uses synthetic filenames. EXR content
-        # found by the generic provider therefore cannot use suffix dispatch.
-        decoded = decoders._decode_exr(path) if exr else decoders.decode_image(path)
+        decoded = decoders.decode_image(path)
         image = Image.fromarray(decoders.render_rgba(decoded))
     image.thumbnail((edge, edge), Image.Resampling.LANCZOS, reducing_gap=3.0)
     return image
+
+
+def _exr(path, edge):
+    from PIL import Image
+    from . import decoders
+    # Both Shell routes have synthetic names. Read the EXR content directly,
+    # retaining only selected-channel strips and a bounded preview. In
+    # particular, do not apply the 16-MP full-float thumbnail allocation limit
+    # to 8K/16K source images, or relax the native input/job/deadline limits.
+    decoded = decoders.decode_exr_thumbnail(path, edge)
+    return Image.fromarray(decoders.render_rgba(decoded))
 
 
 def _radiance(path, edge):
@@ -142,7 +151,7 @@ def _content_thumbnail(path, edge):
         if signature.startswith((b"#?RADIANCE", b"#?RGBE")):
             return _radiance(path, edge)
         if signature.startswith(b"\x76\x2f\x31\x01"):
-            return _linear_or_high_precision(path, edge, exr=True)
+            return _exr(path, edge)
         if signature[8:11] == b"CR\x02":  # Canon CR2's TIFF-based signature.
             return _raw(path, edge)
         try:
@@ -185,7 +194,7 @@ def generate_thumbnail(path, mode, edge):
         if mode == "hdr":
             result = _radiance(path, edge)
         elif mode == "exr":
-            result = _linear_or_high_precision(path, edge, exr=True)
+            result = _exr(path, edge)
         elif mode == "raw":
             result = _raw(path, edge)
         else:

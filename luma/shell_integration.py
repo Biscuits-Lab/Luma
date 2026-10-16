@@ -968,7 +968,8 @@ def status(registry=None) -> Status:
             state = "stale"
             detail = "Registration points to another bundle location; use Repair."
         if native and enabled and state == "installed":
-            detail = _hdr_association_detail(registry)
+            detail = "\n".join(_thumbnail_association_detail(registry, extension)
+                               for extension in (".hdr", ".exr"))
         return Status(state, len(entries), changed, detail, enabled)
     except (ShellIntegrationError, OSError) as exc:
         return Status("blocked", detail=str(exc))
@@ -1000,20 +1001,28 @@ def _association_string(extension: str, kind: int, extra: str | None = None) -> 
     return text if text and len(text) < len(result) else None
 
 
-def _hdr_association_detail(registry) -> str:
-    """A registration receipt is not proof that Windows selects our handler."""
+def _thumbnail_association_detail(registry, extension: str) -> str:
+    """Read the effective association; a receipt alone cannot establish selection."""
+    if extension not in (".hdr", ".exr"):
+        raise ValueError("Unsupported thumbnail status extension")
+    mode = extension[1:]
     try:
-        provider = registry.effective_provider_for(".hdr")
-        if provider in (PROVIDERS["hdr"], PROVIDERS["raster"]):
-            return "Windows selects Luma's thumbnail handler for .hdr."
-        progid = _association_string(".hdr", 20)  # ASSOCSTR_PROGID
+        provider = registry.effective_provider_for(extension)
+        if provider in (PROVIDERS[mode], PROVIDERS["raster"]):
+            return f"Windows selects Luma's thumbnail handler for {extension}."
+        progid = _association_string(extension, 20)  # ASSOCSTR_PROGID
     except OSError:
-        return "The current .hdr thumbnail association could not be checked."
-    detail = ("Windows currently selects another thumbnail provider for .hdr."
-              if provider else "Windows did not report a thumbnail provider for .hdr.")
+        return f"The current {extension} thumbnail association could not be checked."
+    detail = (f"Windows currently selects another thumbnail provider for {extension}."
+              if provider else f"Windows did not report a thumbnail provider for {extension}.")
     if progid and progid.casefold() == r"Applications\Luma.exe".casefold():
         detail += " This file type uses the executable's Open With association."
-    return detail + " Choose Luma for .hdr in Windows Default Apps, then reopen the folder."
+    return detail + f" Choose Luma for {extension} in Windows Default Apps, then reopen the folder."
+
+
+def _hdr_association_detail(registry) -> str:
+    """Compatibility helper for the original HDR-only status API."""
+    return _thumbnail_association_detail(registry, ".hdr")
 
 
 def _user_mutex_name() -> str:

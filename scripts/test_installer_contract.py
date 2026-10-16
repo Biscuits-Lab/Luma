@@ -38,7 +38,7 @@ class InstallerBoundaryTests(unittest.TestCase):
         for name in ("unins000.exe", "unins001.exe"):
             exe = self.root / name
             exe.write_bytes(b"test-only")
-            self.assertEqual(smoke.registered_uninstaller(f'"{exe}"', self.root), exe)
+            self.assertEqual(smoke.registered_uninstaller(f'"{exe}"', self.root), exe.resolve(strict=True))
 
     def test_arp_uninstaller_refuses_other_paths_or_arguments(self):
         root = self.root / "installed"

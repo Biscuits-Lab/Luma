@@ -105,6 +105,23 @@ def validate_files(directory):
             "Checksum manifest does not match the pinned release assets")
 
 
+def validate_public_downloads():
+    # Intentionally anonymous: verify the same public links an end user receives.
+    for name, (size, expected) in ASSETS.items():
+        request = Request(f"https://github.com/{REPO}/releases/download/{TAG}/{name}",
+                          headers={"User-Agent": "Luma-public-download-verification"})
+        digest = hashlib.sha256()
+        received = 0
+        with urlopen(request, timeout=60) as response:
+            for block in iter(lambda: response.read(1024 * 1024), b""):
+                received += len(block)
+                require(received <= size, "Public download exceeds expected size: " + name)
+                digest.update(block)
+        require(received == size and digest.hexdigest() == expected,
+                "Public download size/SHA-256 mismatch: " + name)
+        print(f"Anonymous download verified: {name}; {received} bytes; sha256:{expected}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifacts", type=Path, default=Path("artifacts"))
@@ -132,6 +149,7 @@ def main():
     public = api(f"repos/{REPO}/releases/tags/{TAG}")
     validate_release(public)
     require(public["draft"] is False, "Tag lookup does not expose the published release")
+    validate_public_downloads()
     print(f"Verified published release: https://github.com/{REPO}/releases/tag/{TAG}")
     for name, (size, digest) in ASSETS.items():
         print(f"{name}: {size} bytes; sha256:{digest}")

@@ -1,5 +1,6 @@
 """One-time recovery guards; no network, real release writes, or large files."""
 from copy import deepcopy
+from io import BytesIO
 import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -94,6 +95,23 @@ class RecoveryTests(TestCase):
                 (directory / "a.zip").write_bytes(b"bad")
                 with self.assertRaisesRegex(RuntimeError, "SHA-256"):
                     recovery.validate_files(directory)
+
+    def test_public_download_is_anonymous_and_hash_checked(self):
+        payload = b"verified public bytes"
+        specs = {"test.zip": (len(payload), hashlib.sha256(payload).hexdigest())}
+        with patch.object(recovery, "ASSETS", specs), patch.object(recovery, "urlopen", return_value=BytesIO(payload)) as opened:
+            recovery.validate_public_downloads()
+            request = opened.call_args.args[0]
+            self.assertIsNone(request.get_header("Authorization"))
+            self.assertEqual(request.full_url, f"https://github.com/{recovery.REPO}/releases/download/{recovery.TAG}/test.zip")
+
+    def test_public_download_rejects_truncated_corrupt_or_oversize_bytes(self):
+        payload = b"expected"
+        specs = {"test.zip": (len(payload), hashlib.sha256(payload).hexdigest())}
+        for invalid in (b"", b"badbytes", b"excessive bytes"):
+            with self.subTest(invalid=invalid), patch.object(recovery, "ASSETS", specs), patch.object(recovery, "urlopen", return_value=BytesIO(invalid)):
+                with self.assertRaises(RuntimeError):
+                    recovery.validate_public_downloads()
 
     def test_unexpected_files_are_rejected(self):
         with TemporaryDirectory() as tmp:

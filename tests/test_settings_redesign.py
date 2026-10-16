@@ -235,16 +235,31 @@ def test_settings_header_reflows_for_large_native_font_metrics(qapp, monkeypatch
         for label in dialog.findChildren(QLabel):
             if label.wordWrap() and label.isVisible():
                 assert label.height() >= label.heightForWidth(label.width()), label.text()
-        # Returning to a sufficiently wide layout restores the single compact
-        # row rather than leaving the controls stranded on a second line.
-        dialog.resize(1000, 500)
-        for _ in range(3):
-            qapp.processEvents()
-        heading_center = heading.mapTo(dialog.update_card, heading.rect().center()).y()
-        button_center = dialog.check_button.mapTo(dialog.update_card, dialog.check_button.rect().center()).y()
-        assert abs(heading_center - button_center) <= 1
-        assert dialog.scroll_area.horizontalScrollBar().maximum() == 0
-        dialog.resize(width, 310)
+        # Exercise the real non-window layout directly: native Windows caps
+        # top-level resize requests to the actual desktop, which can be only
+        # 512 logical pixels wide on a 200% CI runner. An overscreen dialog is
+        # not a valid way to force the wide branch of this responsive layout.
+        actual_geometry = QRect(header.geometry())
+        try:
+            for header_width, inline in ((header.sizeHint().width(), True),
+                                         (header.minimumSize().width(), False),
+                                         (header.sizeHint().width(), True)):
+                header.setGeometry(QRect(actual_geometry.x(), actual_geometry.y(),
+                                         header_width, header.heightForWidth(header_width)))
+                heading.parentWidget().layout().activate()
+                actions.layout().activate()
+                heading_rect = QRect(heading.mapTo(dialog.update_card, QPoint()), heading.size())
+                actions_rect = QRect(actions.mapTo(dialog.update_card, QPoint()), actions.size())
+                assert not heading_rect.intersects(actions_rect)
+                assert dialog.check_button.width() >= dialog.check_button.minimumSizeHint().width()
+                if inline:
+                    heading_center = heading.mapTo(dialog.update_card, heading.rect().center()).y()
+                    button_center = dialog.check_button.mapTo(dialog.update_card, dialog.check_button.rect().center()).y()
+                    assert abs(heading_center - button_center) <= 1
+                else:
+                    assert actions_rect.top() > heading_rect.bottom()
+        finally:
+            header.setGeometry(actual_geometry)
         for _ in range(3):
             qapp.processEvents()
         assert dialog.scroll_area.horizontalScrollBar().maximum() == 0
@@ -313,12 +328,18 @@ def test_initial_settings_size_fits_usable_screen_with_native_frame_allowance(qa
     window.show()
     screen = SimpleNamespace(availableGeometry=lambda: QRect(0, 0, *available))
     monkeypatch.setattr(window, 'screen', lambda: screen)
-    dialog = updater.open_update_dialog(window, '0.1.3')
+    dialog = updater.UpdateDialog(window, '0.1.3')
     try:
-        qapp.processEvents()
-        qapp.processEvents()
+        # Check the sizing policy before the native window manager is allowed
+        # to constrain this simulated screen to the runner's actual desktop.
         assert (dialog.width(), dialog.height()) == expected
+        dialog.show()
+        qapp.processEvents()
+        qapp.processEvents()
+        assert dialog.width() <= expected[0]
+        assert dialog.height() <= expected[1]
         assert dialog.width() >= 480
+        assert dialog.scroll_area.widget().width() <= dialog.scroll_area.viewport().width()
         assert dialog.width() + 32 <= available[0]
         assert dialog.height() + 48 <= available[1]
         assert dialog.scroll_area.horizontalScrollBar().maximum() == 0

@@ -3,9 +3,11 @@
 Import, registration_plan(), and status() are read-only. Call install/uninstall
 from setup, removal, or explicit Settings repair. Default Apps choice is separate.
 
-Different pre-existing values are never replaced; identical values are never
-adopted. Thus every owned entry's exact original value is absent. A bounded
-REG_SZ write-ahead journal is flushed before target writes. Interrupted work is
+Different pre-existing values are never replaced except an exact, unowned
+Applications open command for a validated prior payload of the same installation.
+That one command becomes owned; its old bytes are kept only for failure rollback.
+Identical values are never adopted. A bounded REG_SZ write-ahead journal is flushed
+before target writes. Interrupted work is
 rolled back using compare-and-restore, preserving third-party modifications.
 Unknown manifests are never overwritten and key cleanup is never recursive.
 """
@@ -202,6 +204,7 @@ def registration_plan(
 
 
 _TEMPLATE = {(w.key, w.name): w.value for w in registration_plan(r"C:\Luma\Luma.exe")}
+_APPLICATION_COMMAND = (_key(CLASSES, "Applications", "Luma.exe", "shell", "open", "command"), "")
 _PROTECTED_KEYS = {
     "Software", CLASSES, _key(CLASSES, "CLSID"),
     _key(CLASSES, "Applications"), REGISTERED_APPS,
@@ -319,20 +322,52 @@ def _entry_map(data) -> dict:
     return {} if data is None else {_address(e): e["written"] for e in data["entries"]}
 
 
+def _managed_command_path(value) -> PureWindowsPath | None:
+    """Recognize only the conventional command in the versioned payload layout.
+
+    The installer separately validates the actual marker-bearing siblings before
+    providing its allowlist. This structural check also constrains crash journals
+    without trusting arbitrary saved addresses, arguments, or portable paths.
+    """
+    try:
+        _validate_value(_APPLICATION_COMMAND, value)
+    except ShellIntegrationError:
+        return None
+    executable = _windows_path(re.fullmatch(r'"([^"]+)" "%1"', value["data"])[1], "Luma.exe")
+    if value["data"].casefold() != f'"{executable}" "%1"'.casefold():
+        return None
+    path = PureWindowsPath(executable)
+    if (path.parent.parent.name.casefold() != "versions"
+            or not re.fullmatch(r"\d+\.\d+\.\d+-[0-9a-f]{24}", path.parent.name, re.IGNORECASE)):
+        return None
+    return path
+
+
+def _same_installation_command_move(before, after) -> bool:
+    old, new = _managed_command_path(before), _managed_command_path(after)
+    return bool(old and new and old != new and old.parent.parent == new.parent.parent)
+
+
 def _validate_document(document) -> None:
     if (
         not isinstance(document, dict)
-        or type(document.get("version")) is not int or document.get("version") != 1
+        or type(document.get("version")) is not int or document.get("version") not in (1, 2)
     ):
         raise InvalidManifest("Unknown shell-integration manifest version.")
     if document.get("state") == "active":
-        if set(document) != {"version", "state", "data"}:
+        if document["version"] != 1 or set(document) != {"version", "state", "data"}:
             raise InvalidManifest("Unrecognized active manifest.")
         _validate_data(document["data"])
         return
-    if document.get("state") != "pending" or set(document) != {
+    fields = {
         "version", "state", "base", "target", "changes", "created"
-    }:
+    }
+    adopting = document["version"] == 2
+    if adopting:
+        fields.add("adopted_application_command")
+        if document.get("adopted_application_command") is not True:
+            raise InvalidManifest("Invalid application-command adoption journal.")
+    if document.get("state") != "pending" or set(document) != fields:
         raise InvalidManifest("Unrecognized journal.")
     base, target = document["base"], document["target"]
     if base is None and target is None:
@@ -352,6 +387,16 @@ def _validate_document(document) -> None:
     if not isinstance(changes, list) or len(changes) > MAX_ENTRIES:
         raise InvalidManifest("Journal exceeds its bound.")
     before, after = _entry_map(base), _entry_map(target)
+    if adopting:
+        adoption = [change for change in changes if isinstance(change, dict)
+                    and (change.get("key"), change.get("name")) == _APPLICATION_COMMAND]
+        if (target is None or _APPLICATION_COMMAND in before or len(adoption) != 1
+                or not _same_installation_command_move(adoption[0].get("before"),
+                                                       adoption[0].get("after"))):
+            raise InvalidManifest("Application-command adoption is outside its narrow scope.")
+        # Only the one unowned same-installation command can contribute a
+        # rollback value absent from base ownership. Active receipts stay v1.
+        before[_APPLICATION_COMMAND] = adoption[0]["before"]
     seen = set()
     for change in changes:
         if (
@@ -491,13 +536,17 @@ def _recover(registry):
     return (document["data"] if document else None), raw, recovered
 
 
-def _transaction(registry, base, target, changes, created, previous_manifest) -> None:
+def _transaction(registry, base, target, changes, created, previous_manifest,
+                 *, adopted_application_command=False) -> None:
     if base == target and not changes:
         return
     journal = {
         "version": 1, "state": "pending", "base": base, "target": target,
         "changes": changes, "created": created,
     }
+    if adopted_application_command:
+        journal["version"] = 2
+        journal["adopted_application_command"] = True
     pending_value = _manifest_value(journal)
     target_value = _manifest_value(_active(target))
     # Persist and flush the entire journal before ANY target registry write.
@@ -631,6 +680,13 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
                     raise RegistrationConflict(
                         "Explorer registration belongs to another Luma copy. It was left untouched. "
                         "Use Register this copy / repair in Settings to move it deliberately.")
+                if document["version"] == 2:
+                    adoption = next(change for change in document["changes"]
+                                    if _address(change) == _APPLICATION_COMMAND)
+                    if str(_managed_command_path(adoption["before"])).casefold() not in allowed:
+                        raise RegistrationConflict(
+                            "Interrupted registration refers to a prior payload outside the validated "
+                            "installation. Its command was left untouched.")
         base, raw, recovered = _recover(registry)
         handlers = {ext: registry.provider_for(ext) for ext in RASTER}
         old_entries = {_address(e): e for e in (base["entries"] if base else [])}
@@ -643,6 +699,7 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
                 handlers[extension] = old["written"]["data"]
         entries, changes, conflicts = [], [], []
         preserved = 0
+        adopted_application_command = False
         for write in registration_plan(exe, handlers):
             address = (write.key, write.name)
             current = registry.read(*address)
@@ -664,6 +721,15 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
             elif current == write.value:
                 preserved += 1
                 continue
+            elif (address == _APPLICATION_COMMAND and allowed is not None
+                  and _same_installation_command_move(_encoded_value(current), desired)
+                  and str(_managed_command_path(_encoded_value(current))).casefold() in allowed):
+                # A validated sibling command created by Windows Browse/Open
+                # With becomes Luma-owned. Restore its exact old bytes only if
+                # this transaction fails; successful uninstall must remove it.
+                entries.append({"key": write.key, "name": write.name,
+                                "previous": None, "written": desired})
+                adopted_application_command = True
             else:
                 conflicts.append(address)
                 continue
@@ -689,7 +755,8 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
             "keys": sorted(set(base["keys"] if base else []) | set(created)),
             "thumbnails_enabled": True,
         }
-        _transaction(registry, base, target, changes, created, raw)
+        _transaction(registry, base, target, changes, created, raw,
+                     adopted_application_command=adopted_application_command)
         return Result(len(changes), preserved, recovered)
 
 
@@ -724,6 +791,14 @@ def prepare_startup_registration(executable: Path, registry=None) -> Result:
 
 
 def _uninstall_locked(registry) -> Result:
+    document, _ = _read_manifest(registry)
+    if document is not None and document["version"] == 2:
+        # Rolling back an uncompleted adoption restores an unowned old command.
+        # Let setup repair it first; an uninstaller must not then delete that
+        # command's payload while incorrectly reporting that cleanup completed.
+        raise RecoveryRequired(
+            "An interrupted Open With migration needs registration repair before uninstalling. "
+            "No application files or registration values were removed.")
     base, raw, recovered = _recover(registry)
     if base is None:
         return Result(0, 0, recovered)

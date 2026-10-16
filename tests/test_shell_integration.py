@@ -849,3 +849,169 @@ def test_executable_handler_uninstall_keeps_later_foreign_change():
     registry.seed(key, "", foreign)
     assert uninstall(registry).preserved_values == 1
     assert registry.read(key, "") == foreign
+
+
+MANAGED_OLD = r"C:\Users\Test\Luma\versions\0.1.1-aaaaaaaaaaaaaaaaaaaaaaaa\Luma.exe"
+MANAGED_NEW = r"C:\Users\Test\Luma\versions\0.1.2-bbbbbbbbbbbbbbbbbbbbbbbb\Luma.exe"
+MANAGED_OTHER = r"D:\Other Luma\versions\0.1.1-aaaaaaaaaaaaaaaaaaaaaaaa\Luma.exe"
+APP_COMMAND = si._key(si.CLASSES, "Applications", "Luma.exe", "shell", "open", "command")
+
+
+def seed_browsed_command(registry, executable=MANAGED_OLD, command=None):
+    value = si.Value(si.REG_SZ, command if command is not None else f'"{executable}" "%1"')
+    registry.seed(APP_COMMAND, "", value)
+    return value
+
+
+def test_adopt_exact_unowned_prior_installer_command_then_uninstall_removes_it():
+    registry = FakeRegistry()
+    seed_browsed_command(registry)
+    restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,))
+    assert registry.read(APP_COMMAND, "") == si.Value(si.REG_SZ, f'"{MANAGED_NEW}" "%1"')
+    document, _ = si._read_manifest(registry)
+    assert document["version"] == 1
+    entry = next(e for e in document["data"]["entries"] if e["key"] == APP_COMMAND)
+    assert entry["previous"] is None
+    uninstall(registry)
+    assert not registry.values
+
+
+def test_adopt_prior_unowned_command_when_old_manifest_owns_other_entries():
+    registry = FakeRegistry()
+    seed_browsed_command(registry)
+    restricted_install(registry, MANAGED_OLD)
+    document, _ = si._read_manifest(registry)
+    assert all(e["key"] != APP_COMMAND for e in document["data"]["entries"])
+    restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,))
+    uninstall(registry)
+    assert not registry.values
+
+
+@pytest.mark.parametrize("executable,allowed,command", [
+    (MANAGED_OTHER, (MANAGED_OTHER,), None),  # An allowlist alone cannot cross roots.
+    (MANAGED_OLD, (), None),  # The prior marker-bearing payload must be explicitly allowed.
+    (EXE, (EXE,), None),  # Portable paths cannot be adopted.
+    (MANAGED_OLD, (MANAGED_OLD,), f'"{MANAGED_OLD}" --anything "%1"'),
+    (MANAGED_OLD, (MANAGED_OLD,), f'"{MANAGED_OLD}" %1'),
+    (MANAGED_OLD, (MANAGED_OLD,), f'"{MANAGED_OLD}" "%1" '),
+])
+def test_browsed_command_migration_refuses_foreign_paths_or_arguments(executable, allowed, command):
+    registry = FakeRegistry()
+    seed_browsed_command(registry, executable, command)
+    before = copy.deepcopy(registry.values)
+    with pytest.raises(si.RegistrationConflict):
+        restricted_install(registry, MANAGED_NEW, allowed)
+    assert registry.values == before and not registry.log
+
+
+def test_explicit_repair_without_validated_allowlist_does_not_adopt_old_command():
+    registry = FakeRegistry()
+    seed_browsed_command(registry)
+    with pytest.raises(si.RegistrationConflict):
+        install(registry, MANAGED_NEW)
+
+
+def test_adoption_preserves_later_foreign_change_on_uninstall():
+    registry = FakeRegistry()
+    seed_browsed_command(registry)
+    restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,))
+    later = seed_browsed_command(registry, OTHER_EXE)
+    assert uninstall(registry).preserved_values == 1
+    assert registry.read(APP_COMMAND, "") == later
+
+
+def adoption_write_index():
+    return next(index for index, write in enumerate(si.registration_plan(MANAGED_NEW), 1)
+                if (write.key, write.name) == (APP_COMMAND, ""))
+
+
+def test_adoption_failure_restores_exact_old_unowned_command():
+    registry = FakeRegistry()
+    seed_browsed_command(registry)
+    before = copy.deepcopy(registry.values)
+    registry.fail_target_calls = {adoption_write_index() + 1}
+    with pytest.raises(si.ShellIntegrationError, match="rolled back"):
+        restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,))
+    assert registry.values == before
+
+
+def interrupted_adoption():
+    registry = FakeRegistry()
+    original = seed_browsed_command(registry)
+    registry.crash_on = adoption_write_index() + 1
+    with pytest.raises(SimulatedCrash):
+        restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,))
+    document, _ = si._read_manifest(registry)
+    assert document["version"] == 2 and document["state"] == "pending"
+    return registry, original, document
+
+
+def test_interrupted_adoption_recovery_restores_old_bytes_before_retry():
+    registry, original, _ = interrupted_adoption()
+    with registry.locked():
+        base, raw, recovered = si._recover(registry)
+    assert recovered and base is None and raw is None
+    assert registry.values == {registry.address(APP_COMMAND, ""): original}
+    restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,))
+    uninstall(registry)
+    assert not registry.values
+
+
+def test_pending_adoption_is_not_recovered_without_both_validated_payloads():
+    registry, _, _ = interrupted_adoption()
+    before = copy.deepcopy(registry.values)
+    with pytest.raises(si.RegistrationConflict, match="prior payload"):
+        restricted_install(registry, MANAGED_NEW)
+    assert registry.values == before
+    assert restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,)).recovered
+
+
+def test_uninstall_of_interrupted_adoption_requires_repair_without_mutation():
+    registry, _, _ = interrupted_adoption()
+    before = copy.deepcopy(registry.values)
+    with pytest.raises(si.RecoveryRequired, match="repair before uninstalling"):
+        uninstall(registry)
+    assert registry.values == before
+    with patch.object(si, "_runtime_guard"):
+        with pytest.raises(si.RecoveryRequired):
+            si.uninstall_if_executable(Path(MANAGED_NEW), registry)
+    assert registry.values == before
+
+
+@pytest.mark.parametrize("tamper", ["arguments", "foreign_root", "portable", "address", "missing_flag", "false_flag", "active", "missing_change"])
+def test_forged_adoption_journals_are_rejected_without_mutation(tamper):
+    registry, _, document = interrupted_adoption()
+    change = next(c for c in document["changes"] if c["key"] == APP_COMMAND)
+    if tamper == "arguments":
+        change["before"]["data"] += " --extra"
+    elif tamper == "foreign_root":
+        change["before"]["data"] = f'"{MANAGED_OTHER}" "%1"'
+    elif tamper == "portable":
+        change["before"]["data"] = f'"{EXE}" "%1"'
+    elif tamper == "address":
+        change["key"] = si._key(si.CLASSES, "Luma.Image.hdr", "shell", "open", "command")
+    elif tamper == "missing_flag":
+        del document["adopted_application_command"]
+    elif tamper == "false_flag":
+        document["adopted_application_command"] = False
+    elif tamper == "active":
+        document = {"version": 2, "state": "active", "data": document["target"]}
+    elif tamper == "missing_change":
+        document["changes"].remove(change)
+    registry.seed(si.METADATA_KEY, si.MANIFEST_NAME, si.Value(si.REG_SZ, json.dumps(document)))
+    before = copy.deepcopy(registry.values)
+    with pytest.raises(si.InvalidManifest):
+        restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,))
+    assert registry.values == before
+
+
+def test_adoption_rollback_preserves_later_third_party_command_change():
+    registry, _, _ = interrupted_adoption()
+    later = seed_browsed_command(registry, OTHER_EXE)
+    with registry.locked():
+        base, raw, recovered = si._recover(registry)
+    assert recovered and base is None and raw is None
+    assert registry.values == {registry.address(APP_COMMAND, ""): later}
+    with pytest.raises(si.RegistrationConflict):
+        restricted_install(registry, MANAGED_NEW, (MANAGED_OLD,))
+    assert registry.read(APP_COMMAND, "") == later

@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 ARP = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{7F17F980-8965-4C81-8470-4880AD6B989F}_is1"
 JOURNAL = r"Software\Biscuits Lab\Luma\ShellIntegration"
 SETTINGS = r"Software\Biscuits Lab\Luma"
+APP_COMMAND = r"Software\Classes\Applications\Luma.exe\shell\open\command"
 
 
 def registered_uninstaller(command: str, install_root: Path) -> Path:
@@ -63,6 +64,7 @@ def main() -> int:
     install_root = work / "installed"
     installer = args.installer.resolve(strict=True)
     native = None
+    manual_command = None
 
     def read_value(root, key, name=""):
         try:
@@ -76,7 +78,7 @@ def main() -> int:
 
     def defaults():
         result = {}
-        for ext in ("png", "jpg", "tga", "dds", "hdr", "exr"):
+        for ext in (extension[1:] for extension in shell.EXTENSIONS):
             result[ext] = read_value(winreg.HKEY_CURRENT_USER, rf"Software\Classes\.{ext}")
             for value in ("ProgId", "Hash"):
                 key = rf"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.{ext}\UserChoice"
@@ -96,6 +98,17 @@ def main() -> int:
     def install(package, name, expected=0):
         run([package, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
              f"/DIR={install_root}", "/TASKS=", f"/LOG={logs / (name + '.log')}"], name, expected)
+
+    def assert_open_with_discovery(exe, name):
+        # Fresh process avoids stale Shell caches after side-by-side upgrades.
+        # The helper only enumerates; it never launches or promotes a handler.
+        output = logs / f"{name}-report.json"
+        run([sys.executable, ROOT / "scripts/probe_open_with.py",
+             "--executable", exe, "--output", output], name, timeout=120)
+        discovery = json.loads(output.read_text(encoding="utf-8"))
+        assert discovery["passed"] and len(discovery["extensions"]) == len(shell.EXTENSIONS)
+        assert defaults() == before_defaults, "Open With enumeration changed Windows defaults"
+        report.setdefault("open_with_discovery", []).append(discovery)
 
     def uninstall(name, expected=0):
         value = read_value(winreg.HKEY_CURRENT_USER, ARP, "UninstallString")
@@ -122,6 +135,7 @@ def main() -> int:
         assert defaults() == before_defaults, "Setup changed Windows defaults"
         hdr = r"Software\Classes\Luma.Image.hdr"
         assert read_value(winreg.HKEY_CURRENT_USER, hdr + r"\shell\open\command")[0] == f'"{exe.resolve(strict=True)}" "%1"'
+        assert read_value(winreg.HKEY_CURRENT_USER, APP_COMMAND)[0] == f'"{exe.resolve(strict=True)}" "%1"'
         assert read_value(winreg.HKEY_CURRENT_USER, hdr + "\\shellex\\" + shell.THUMBNAIL_IID)[0] == shell.PROVIDERS["hdr"]
         assert read_value(winreg.HKEY_CURRENT_USER, shell.CAPABILITIES + r"\FileAssociations", ".hdr")[0] == "Luma.Image.hdr"
         app_provider = read_value(winreg.HKEY_CURRENT_USER,
@@ -167,6 +181,7 @@ def main() -> int:
         assert shortcut.is_file() and not desktop.exists()
         first, = payloads()
         assert_owner(first / "Luma.exe")
+        assert_open_with_discovery(first / "Luma.exe", "open-with-after-install")
         run([first / "Luma.exe", "--smoke-test"], "installed-exe", timeout=120)
         checks.append("current-user install, shortcuts, EXE launch, automatic HDR/application-route registration, unchanged defaults")
 
@@ -189,6 +204,18 @@ def main() -> int:
         install(installer, "reinstall-loaded-dll")
         assert payloads() == [first]
         assert_owner(first / "Luma.exe")
+        # Simulate Windows' manual Browse registration for the old installed
+        # executable, without a Luma journal. Only this test-owned command is
+        # seeded; real extension defaults and UserChoice are never written.
+        with patch.object(shell, "_runtime_guard", return_value=None):
+            shell.uninstall_if_executable(first / "Luma.exe")
+        assert journal() is None and defaults() == before_defaults
+        assert read_value(winreg.HKEY_CURRENT_USER, APP_COMMAND) is None
+        manual_command = f'"{(first / "Luma.exe").resolve(strict=True)}" "%1"'
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, APP_COMMAND, 0,
+                               winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, manual_command)
+        assert read_value(winreg.HKEY_CURRENT_USER, APP_COMMAND) == (manual_command, winreg.REG_SZ)
         # A repackaged build with the same app version gets its own immutable path.
         second_bundle = work / "upgrade-bundle"
         shutil.copytree(ROOT / "dist" / "Luma", second_bundle)
@@ -205,10 +232,14 @@ def main() -> int:
         target = subprocess.check_output(["pwsh", "-NoProfile", "-Command", command], text=True).strip()
         assert Path(target) == second / "Luma.exe"
         assert_owner(second / "Luma.exe")
+        assert_open_with_discovery(second / "Luma.exe", "open-with-after-upgrade")
         checks.append("loaded native DLL survives reinstall and side-by-side upgrade; shortcut and automatic registration target latest payload")
+        checks.append("automatic upgrade adopts only the exact unjournaled manual-Browse command for its validated older sibling; latest Applications command and Windows defaults verified")
+        checks.append("native Open With discovery finds latest Luma executable and display name for every supported extension after install and upgrade; recommendation is diagnostic only")
 
         uninstall("uninstall-loaded-dll", expected=None)
         assert journal() is None and (second / "Luma.exe").is_file()
+        assert read_value(winreg.HKEY_CURRENT_USER, APP_COMMAND) is None, "Uninstall restored a stale manual-Browse command"
         unload()
         set_test_owner(first / "Luma.exe")
         uninstall("uninstall-all-installed-payloads")
@@ -217,6 +248,7 @@ def main() -> int:
         assert not shortcut.exists() and not desktop.exists()
         assert not list(install_root.glob("versions/*/Luma.exe"))
         assert not list(install_root.glob("versions/*/LumaThumbnail.dll"))
+        assert read_value(winreg.HKEY_CURRENT_USER, APP_COMMAND) is None, "Managed uninstall left a stale application command"
         assert user_image.read_bytes() == b"user-owned image sentinel"
         assert read_value(winreg.HKEY_CURRENT_USER, SETTINGS, "InstallerSmokePreserve")[0] == "keep my settings"
         assert defaults() == before_defaults
@@ -249,6 +281,15 @@ def main() -> int:
                 with patch.object(shell, "_runtime_guard", return_value=None):
                     shell.uninstall_if_executable(exe)
             except Exception as error:
+                report.setdefault("cleanup_errors", []).append(str(error))
+        # A failure before adoption may leave precisely our unjournaled seed.
+        # Never remove a replacement value or another copy's command.
+        if manual_command is not None and read_value(winreg.HKEY_CURRENT_USER, APP_COMMAND) == (manual_command, winreg.REG_SZ):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APP_COMMAND, 0,
+                                    winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
+                    winreg.DeleteValue(key, "")
+            except OSError as error:
                 report.setdefault("cleanup_errors", []).append(str(error))
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, SETTINGS, 0, winreg.KEY_SET_VALUE) as key:

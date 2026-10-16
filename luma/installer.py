@@ -26,7 +26,7 @@ def _validated_payload(directory: Path) -> Path | None:
         return None
     marker = directory / MARKER_NAME
     executable = directory / "Luma.exe"
-    if not all(p.is_file() and _plain_path(p) for p in (marker, executable)):
+    if not all(p.is_file() and _plain_path(p) and p.stat().st_nlink == 1 for p in (marker, executable)):
         return None
     try:
         if marker.stat().st_size > 4096:
@@ -82,6 +82,13 @@ An unrelated portable copy is never passed to the registrar and stays registered
 Errors propagate so the uninstaller aborts before deleting application files.
 """
     candidates = installed_executables(executable)
+    root = Path(executable).resolve(strict=True).parent.parent.parent
+    # Historical installers have no root launcher. Any partial/new root state
+    # must instead go through strict ownership checks, never a legacy fallback.
+    from .managed_launch import OWNER_NAME, POINTER_NAME, JOURNAL_NAME, UNINSTALL_NAME, READY_NAME, prepare_managed_uninstall
+    if any((root / name).exists() or (root / name).is_symlink()
+           for name in ("Luma.exe", OWNER_NAME, POINTER_NAME, JOURNAL_NAME, UNINSTALL_NAME, READY_NAME)):
+        return prepare_managed_uninstall(executable)
     from .shell_integration import uninstall_if_executable
     for candidate in candidates:
         uninstall_if_executable(candidate)
@@ -98,6 +105,11 @@ def register_managed_installation(executable: Path) -> None:
     # Journal paths are canonical. In particular Windows can supply RUNNER~1
     # (or another 8.3 ancestor) even though the older registration uses its
     # expanded long path. Resolve all siblings, not just the current payload.
-    candidates = tuple(path.resolve(strict=True) for path in installed_executables(executable))
-    from .shell_integration import install
-    install(Path(executable).resolve(strict=True), allowed_previous_executables=candidates)
+    from .managed_launch import activate_managed_installation
+    activate_managed_installation(executable)
+
+
+def finalize_managed_uninstall(executable: Path) -> None:
+    """Post-busy-guard cleanup of only the exact owned stable pointer."""
+    from .managed_launch import finalize_managed_uninstall as finalize
+    finalize(executable)

@@ -1,0 +1,32 @@
+#include <windows.h>
+1 ICON "@LUMA_LAUNCHER_ICON@"
+
+// This is the stable launcher ABI version, not the selected viewer's version.
+// Normal viewer updates retain this compatible root binary unchanged.
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Biscuits Lab\0"
+            VALUE "FileDescription", "Luma stable application launcher\0"
+            VALUE "FileVersion", "1.0.0.0\0"
+            VALUE "InternalName", "LumaLauncher\0"
+            VALUE "OriginalFilename", "Luma.exe\0"
+            VALUE "ProductName", "Luma\0"
+            VALUE "ProductVersion", "1.0.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

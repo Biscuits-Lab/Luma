@@ -171,6 +171,7 @@ def _plain(path: Path) -> bool:
 def _plain_absolute_file(path: Path) -> Path:
     path = Path(path)
     if (not path.is_absolute() or ".." in path.parts or not path.is_file()
+            or path.stat().st_nlink != 1
             or not all(_plain(p) for p in (path, *path.parents))):
         raise InstallationError("The application or installer path is missing, linked or unsafe.")
     return path.resolve(strict=True)
@@ -190,8 +191,12 @@ def detect_installation(executable: Path | None = None, *, frozen: bool | None =
         # Check the lexical layout before resolving: resolving a link could hide
         # that a managed marker was moved or redirected outside its original root.
         marker = executable.parent / MARKER_NAME
+        root_hints = (executable.parent / name for name in (
+            "launcher-owner.txt", "active-payload.txt", "active-payload.pending.json",
+            "managed-uninstall.pending.json", "managed-uninstall.ready"))
         managed_hint = (marker.exists() or marker.is_symlink() or marker.is_junction()
-                        or executable.parent.parent.name.casefold() == "versions")
+                        or executable.parent.parent.name.casefold() == "versions"
+                        or any(path.exists() or path.is_symlink() or path.is_junction() for path in root_hints))
         if managed_hint:
             installed_executables(executable)
             canonical = _plain_absolute_file(executable)
@@ -264,6 +269,13 @@ def _updated_payload(context: InstallationContext, version: str) -> ManagedUpdat
     actual = detect_installation(candidate, frozen=True, platform="win32")
     if actual.root != context.root or actual.version != version:
         raise InstallationError("The new payload is outside the original installation. Your current app stays open.")
+    try:
+        from .managed_launch import read_active_payload
+        selected = read_active_payload(context.root)
+        if selected.executable != candidate or selected.version != version:
+            raise InstallerError("The stable root still selects another payload.")
+    except (InstallerError, OSError) as error:
+        raise InstallationError("Setup finished, but the stable launch entry does not select the verified new payload. Your current app stays open.") from error
     return ManagedUpdate(version, candidate.parent, candidate, context.executable, context.root)
 
 

@@ -52,11 +52,27 @@ def test_native_installer_preflight_runs_before_expensive_build_and_cannot_be_ig
     assert 'build/installer-preflight/**' in source
 
 
-def test_current_work_is_validated_on_main_and_legacy_release_is_manual_only():
+def test_all_github_workflows_remain_manual_only_after_user_stops_cloud_builds():
     source = WORKFLOW.read_text(encoding='utf-8')
-    assert 'branches: [main]' in source
+    assert 'workflow_dispatch:' in source.split('permissions:', 1)[0]
+    assert 'push:' not in source.split('permissions:', 1)[0]
+    assert 'pull_request' not in source.split('permissions:', 1)[0]
     assert 'feature/exr-performance' not in source
     legacy = (WORKFLOW.parent / 'windows-release.yml').read_text(encoding='utf-8')
     triggers = legacy.split('permissions:', 1)[0]
     assert 'workflow_dispatch:' in triggers
     assert 'push:' not in triggers
+
+
+def test_actual_launcher_preflight_fails_before_full_viewer_build():
+    source = WORKFLOW.read_text(encoding='utf-8')
+    blocks = source.split('      - ')
+    preflight = next(block for block in blocks if block.startswith(
+        'name: Preflight actual stable launcher and process safety\n'))
+    build = next(block for block in blocks if block.startswith(
+        'name: Build native bridge, test viewer, create folder bundle\n'))
+    assert blocks.index(preflight) < blocks.index(build)
+    assert 'ctest --test-dir build/launcher -C Release --output-on-failure' in preflight
+    assert 'continue-on-error' not in preflight
+    assert preflight.count('if ($LASTEXITCODE -ne 0) { throw') == 3
+    assert 'build/launcher/launcher-native-report.json' in source

@@ -1,98 +1,119 @@
-"""A scrollable information overlay that never changes the canvas layout."""
+"""An inset information card that reserves layout space beside the image."""
 from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QTextOption
-from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QTextBrowser, QVBoxLayout, QWidget
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QTextOption
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QTextBrowser, QVBoxLayout, QWidget
 
 from .i18n import tr
 
 
-class DetailsOverlay(QScrollArea):
-    """Right-aligned canvas child; only its visible body receives input.
+class _DetailsSurface(QWidget):
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 8, 8)
+        painter.setClipPath(path)
+        painter.fillRect(self.rect(), QColor('#272727'))
+        painter.fillRect(0, 0, self.width(), 44, QColor('#303030'))
+        painter.setClipping(False)
+        painter.setPen(QPen(QColor('#333333'), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+        painter.end()
 
-    This is deliberately not added to the middle layout. Toggling information
-    must not resize QGraphicsView or alter its fit baseline, transform or center.
-    A separate mouse-transparent sibling paints the exterior glass shadow.
+
+class DetailsOverlay(QWidget):
+    """Compatibility name for the docked card, no longer a canvas overlay.
+
+    The outer 10px gutter exposes the viewer background around real rounded
+    corners. A fixed heading/close button sits above the scrolling metadata.
+    The opaque reference surface no longer captures or blurs image pixels.
     """
     visibilityChanged = Signal(bool)
-    PANEL_WIDTH = 304
-    SHADOW_WIDTH = 12
+    closeRequested = Signal()
+    PANEL_WIDTH = 324
+    CARD_MARGIN = 10
 
     def __init__(self, canvas, parent):
         super().__init__(parent)
         self.canvas = canvas
+        # Keep the optional interface used by display-work suspension; there
+        # is intentionally no active backdrop worker for an opaque docked card.
         self.glass = None
-        self.setObjectName('sidebar')
+        self.setObjectName('details_panel')
         self.setAccessibleName(tr('Image information'))
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setFixedWidth(self.PANEL_WIDTH)
         self.setStyleSheet('''
             QWidget { background: transparent; }
-            QScrollArea#sidebar { border: 0; background: transparent; }
-            QComboBox { background: rgba(255,255,255,15); border-color: rgba(255,255,255,24); }
-            QComboBox QAbstractItemView { background: #2a2a2a; }
-            QPushButton:hover { background: rgba(255,255,255,22); }
-            QPushButton:pressed { background: rgba(255,255,255,35); }
+            QScrollArea { border: 0; background: transparent; }
+            QLabel#details_card_title { font-size: 14px; font-weight: 600; }
+            QPushButton#details_close { border: 0; padding: 0; border-radius: 5px; }
+            QPushButton#details_close:hover { background: #424242; }
+            QPushButton#details_close:focus { border: 1px solid #aaaaaa; }
             QScrollBar:vertical { background: transparent; width: 6px; }
-            QScrollBar::handle:vertical { background: rgba(255,255,255,64); border-radius: 3px; }
+            QScrollBar::handle:vertical { background: #595959; border-radius: 3px; }
         ''')
-        self.viewport().setAutoFillBackground(False)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(self.CARD_MARGIN, self.CARD_MARGIN, self.CARD_MARGIN, self.CARD_MARGIN)
+        outer.setSpacing(0)
+        self.card = _DetailsSurface(self)
+        self.card.setObjectName('details_card')
+        outer.addWidget(self.card)
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(1, 0, 1, 1)
+        card_layout.setSpacing(0)
+        self.header = QWidget(self.card)
+        self.header.setFixedHeight(44)
+        header_layout = QHBoxLayout(self.header)
+        header_layout.setContentsMargins(18, 0, 10, 0)
+        title = QLabel(tr('Image information'), objectName='details_card_title')
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        from .settings_widgets import SettingsCloseButton
+        self.close_button = SettingsCloseButton(self.header)
+        self.close_button.setObjectName('details_close')
+        self.close_button.setFixedSize(28, 28)
+        self.close_button.setIconSize(QSize(15, 15))
+        self.close_button.setAccessibleName(tr('Close') + ' · ' + tr('Image information'))
+        self.close_button.setToolTip(self.close_button.accessibleName())
+        self.close_button.clicked.connect(self.closeRequested)
+        header_layout.addWidget(self.close_button)
+        card_layout.addWidget(self.header)
+        self.scroll_area = QScrollArea(self.card)
+        self.scroll_area.setObjectName('sidebar')
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_area.viewport().setAutoFillBackground(False)
+        card_layout.addWidget(self.scroll_area, 1)
         self.content = QWidget(objectName='detailsContent')
-        self.setWidget(self.content)
+        self.scroll_area.setWidget(self.content)
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(20, 22, 20, 18)
+        self.content_layout.setContentsMargins(18, 20, 18, 18)
         self.content_layout.setSpacing(11)
-        parent.installEventFilter(self)
         self.hide()
-        self._place()
 
-    def attach_glass(self):
-        from .glass_backdrop import GlassBackdrop
-        self.glass = GlassBackdrop(self.canvas, self.parentWidget(), shadow_width=self.SHADOW_WIDTH)
-        self._place()
-        self.glass.setVisible(self.isVisible())
-        if self.isVisible():
-            self.glass.raise_()
-            self.raise_()
+    def verticalScrollBar(self):
+        return self.scroll_area.verticalScrollBar()
 
-    def _place(self):
-        parent = self.parentWidget()
-        width = min(self.PANEL_WIDTH, parent.width())
-        self.setGeometry(max(0, parent.width() - width), 0, width, parent.height())
-        if self.glass is not None:
-            self.glass.setGeometry(self.x() - self.SHADOW_WIDTH, self.y(),
-                                   self.width() + self.SHADOW_WIDTH, self.height())
-            if self.isVisible():
-                self.glass.raise_()
-                self.raise_()
-                self.glass.invalidate()
+    def horizontalScrollBar(self):
+        return self.scroll_area.horizontalScrollBar()
 
     def invalidate_backdrop(self):
-        if self.glass is not None and self.isVisible():
-            self.glass.invalidate()
-
-    def eventFilter(self, watched, event):
-        if watched is self.parentWidget() and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
-            self._place()
-        return super().eventFilter(watched, event)
+        # Existing display paths can invalidate this without scheduling work.
+        self.card.update()
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._place()
-        if self.glass is not None:
-            self.glass.show()
-            self.glass.raise_()
-        self.raise_()
         self.visibilityChanged.emit(True)
 
     def hideEvent(self, event):
-        if self.glass is not None:
-            self.glass.hide()
         self.visibilityChanged.emit(False)
         super().hideEvent(event)
 

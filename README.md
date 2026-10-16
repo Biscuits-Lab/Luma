@@ -8,6 +8,7 @@ A focused, dark desktop image viewer for photography, rendered images and produc
 - Browse neighboring images and a thumbnail filmstrip
 - Fit at 100%, zoom relative to the fitted size, view actual pixels, pan and enter fullscreen
 - Rotate the display, copy the displayed image, or explicitly save an SDR copy
+- Edit a separate copy with Crop, Adjust, Filters and Markup; undo changes without changing the source
 - Move a selected file to the recycle bin after confirmation
 - Inspect image information and RGBA channels
 - View JPEG, PNG, TIFF, WebP, BMP, GIF (first frame), TGA and supported DDS textures
@@ -16,7 +17,7 @@ A focused, dark desktop image viewer for photography, rendered images and produc
 
 **HDR here means reading high-dynamic-range files and tone-mapping them for the ordinary desktop. This version does not enable native Windows HDR output or drive an HDR display pipeline.**
 
-Opening, browsing and display rotation do not change the original file. Copy/Save As are explicit actions; Save As creates a display-rendered, tone-mapped SDR copy rather than preserving scene-linear HDR/RAW data. Recycle-bin deletion asks for confirmation and never falls back to permanent deletion. Luma is a viewer rather than a full photo/RAW editor. Camera and texture support depends on the decoder and variant; see [format details](docs/FORMATS.md).
+Opening, browsing and display rotation do not change the original file. Copy/Save As are explicit actions; Save As creates a display-rendered, tone-mapped SDR copy rather than preserving scene-linear HDR/RAW data. Recycle-bin deletion asks for confirmation and never falls back to permanent deletion. The editor works on the current 8-bit SDR display, not the original scene-linear HDR or RAW sensor data. See [editing scope and limits](docs/EDITING.md). Camera and texture support depends on the decoder and variant; see [format details](docs/FORMATS.md).
 
 ## Windows 快速开始
 
@@ -26,7 +27,7 @@ Opening, browsing and display rotation do not change the original file. Copy/Sav
 
 ## 更新与旧版本迁移
 
-当前开发版修复了旧更新器仅解压另一份程序、原快捷方式仍指向旧版本的问题。安装版更新会校验官方 Setup，在原安装目录升级，并等待新版窗口确认真实进程路径和内置版本后再退出旧窗口。安装失败或无法确认启动时，旧窗口保持打开。
+当前开发版修复了旧更新器仅解压另一份程序、原快捷方式仍指向旧版本的问题。安装目录第一层的固定 Luma.exe 入口选择当前版本，快捷方式和打开方式使用同一入口。安装版更新会校验官方 Setup，在原安装目录升级，并等待新版窗口确认真实进程路径和内置版本后再退出旧窗口。安装失败或无法确认启动时，旧窗口保持打开。
 
 已有 0.1.2 / 0.1.3 用户需要先从 [Releases](https://github.com/Biscuits-Lab/Luma/releases) 手动安装一次包含此修复的安装包；新包无法修改正在运行的旧更新器。免安装版暂时仅提供手动更新入口，请将 ZIP 解压到新文件夹并更新自己的快捷方式，避免覆盖运行中的文件。详见 [更新与回滚说明](docs/BUILDING.md#update-and-upgrade-policy)。开发候选版本不等于已经发布的 Release。
 
@@ -69,7 +70,7 @@ Offscreen tests can exercise logic and widgets; they do not certify native Windo
 
 ## Interface
 
-Use the ellipsis menu at the upper left for Save As, Copy, Open, and Settings. Rotation and confirmed recycle-bin deletion have adjacent buttons. The compact Windows title bar keeps the filename centered. Information and the thumbnail filmstrip start hidden. The lower-left controls show the filmstrip toggle, compact format/dimensions/file-size details, and then the information toggle. The 34 px title bar shares the canvas’s neutral dark gray background; the 36 px bottom bar is slightly lighter, without dividing lines. Zoom and fullscreen controls are at the lower right.
+Use the ellipsis menu at the upper left for Save As, Copy, Open, and Settings. Rotation, local editing and confirmed recycle-bin deletion have adjacent buttons. The compact Windows title bar keeps the filename centered. Information and the thumbnail filmstrip start hidden. Details opens as a rounded inset panel beside the image; fit mode adapts to the remaining canvas. The lower-left controls show the filmstrip toggle, compact format/dimensions/file-size details, and then the information toggle. The 34 px title bar shares the canvas’s neutral dark gray background; the 36 px bottom bar is slightly lighter, without dividing lines. Zoom and fullscreen controls are at the lower right.
 
 The interface follows the system display language: Simplified Chinese, Traditional Chinese, or English fallback. Settings, menus, tooltips, confirmations and errors are localized; filenames and original metadata are preserved. Restart Luma after changing the OS display language. See [language selection and UI verification](docs/LOCALIZATION.md).
 

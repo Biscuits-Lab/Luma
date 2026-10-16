@@ -128,6 +128,108 @@ def close_owned_gui(process):
         process.wait(timeout=10)
 
 
+
+class OwnedLauncherChild:
+    """Keep the verified exact child handle until native cleanup has finished."""
+    def __init__(self, acknowledgment, launcher):
+        from ctypes import wintypes
+        from luma.update_probe import _verified_launcher_child, process_executable
+        self.pid = acknowledgment.pid
+        self.returncode = None
+        self.api = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self.api.OpenProcess.restype = wintypes.HANDLE
+        self.api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.api.WaitForSingleObject.restype = wintypes.DWORD
+        self.api.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        self.api.GetExitCodeProcess.restype = wintypes.BOOL
+        self.api.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self.api.TerminateProcess.restype = wintypes.BOOL
+        self.api.CloseHandle.argtypes = [wintypes.HANDLE]
+        self._handle = self.api.OpenProcess(0x1000 | 0x100000 | 0x1, False, self.pid)
+        if not self._handle:
+            raise RuntimeError("Could not retain the exact acknowledged child for safe teardown")
+        try:
+            assert self.poll() is None
+            assert process_executable(self) == acknowledgment.executable
+            # With our child handle retained, PID reuse cannot change this check.
+            assert _verified_launcher_child(launcher, self.pid, acknowledgment.executable) == acknowledgment.executable
+        except BaseException:
+            self.close()
+            raise
+
+    def poll(self):
+        from ctypes import wintypes
+        result = self.api.WaitForSingleObject(self._handle, 0)
+        if result == 258:
+            return None
+        if result != 0:
+            raise RuntimeError("Could not query the retained child process")
+        code = wintypes.DWORD()
+        if not self.api.GetExitCodeProcess(self._handle, ctypes.byref(code)):
+            raise RuntimeError("Could not read the retained child's exit status")
+        self.returncode = code.value
+        return self.returncode
+
+    def wait(self, timeout):
+        result = self.api.WaitForSingleObject(self._handle, int(timeout * 1000))
+        if result == 258:
+            raise subprocess.TimeoutExpired("owned Luma payload", timeout)
+        return self.poll()
+
+    def terminate(self):
+        if not self.api.TerminateProcess(self._handle, 1):
+            raise RuntimeError("Could not terminate the exact retained smoke child")
+
+    def close(self):
+        if self._handle:
+            self.api.CloseHandle(self._handle)
+            self._handle = None
+
+
+def capture_unacknowledged_child(launcher, executable):
+    """Recover only this live launcher's exact OS-verified child for teardown."""
+    from ctypes import wintypes
+    from types import SimpleNamespace
+    if launcher.poll() is not None:
+        return None
+    class Entry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    api.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    api.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+    api.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+    api.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = api.CreateToolhelp32Snapshot(2, 0)
+    if handle == ctypes.c_void_p(-1).value:
+        raise RuntimeError("Could not inspect the owned launcher for safe failed-probe teardown")
+    children = []
+    try:
+        entry = Entry()
+        entry.dwSize = ctypes.sizeof(entry)
+        more = api.Process32FirstW(handle, ctypes.byref(entry))
+        count = 0
+        while more:
+            count += 1
+            if count > 65536:
+                raise RuntimeError("Process snapshot exceeded its safe bound")
+            if entry.th32ParentProcessID == launcher.pid:
+                children.append(entry.th32ProcessID)
+            more = api.Process32NextW(handle, ctypes.byref(entry))
+    finally:
+        api.CloseHandle(handle)
+    if not children:
+        return None
+    if len(children) != 1:
+        raise RuntimeError("The owned launcher has ambiguous children; refusing process cleanup")
+    return OwnedLauncherChild(SimpleNamespace(pid=children[0], executable=executable), launcher)
+
+
 def wait_for_binary_release(root: Path, timeout=10) -> None:
     """Bounded post-exit guard for mapped DLLs/temporary AV handles, no writes."""
     from ctypes import wintypes
@@ -138,7 +240,7 @@ def wait_for_binary_release(root: Path, timeout=10) -> None:
     api.CloseHandle.argtypes = [wintypes.HANDLE]
     api.CloseHandle.restype = wintypes.BOOL
     invalid = ctypes.c_void_p(-1).value
-    binaries = [path for path in (root / "versions").rglob("*")
+    binaries = [path for path in root.rglob("*")
                 if path.suffix.casefold() in (".exe", ".dll", ".pyd") and path.is_file()]
     if any(path.is_symlink() or path.is_junction() for path in binaries):
         raise RuntimeError("Refusing to inspect linked binaries during owned cleanup")
@@ -170,6 +272,7 @@ def main(argv=None) -> int:
     import winreg
     from luma import shell_integration as shell
     from luma.installer import installed_executables
+    from luma.managed_launch import read_active_payload
     from luma.update_installation import (
         _get_dll_directory, _windows_dll_api, apply_verified_setup, detect_installation,
     )
@@ -182,6 +285,7 @@ def main(argv=None) -> int:
     work = None
     install_root = None
     native = None
+    updated = None
     captured = []  # (purpose, exact Popen handle), never system-wide enumeration.
     streams = []
     seeded_setting = False
@@ -239,7 +343,8 @@ def main(argv=None) -> int:
                                 text=True, errors="replace", timeout=30, check=True)
         return Path(result.stdout.strip()).resolve(strict=True)
 
-    def snapshot(executable, version):
+    def snapshot(executable, version, launch_entry=None):
+        launch_entry = launch_entry or executable
         document, _ = shell._read_manifest(shell.WinRegistry())
         if document is None or document["state"] != "active" or not shell._owned_by_executable(document["data"], str(executable)):
             raise AssertionError("Shell registration does not belong to the exact expected managed payload")
@@ -248,9 +353,9 @@ def main(argv=None) -> int:
         assert read_value(ARP, "DisplayName")[0] == "Luma"
         assert read_value(ARP, "DisplayName", winreg.HKEY_LOCAL_MACHINE) is None
         command = read_value(APP_COMMAND)
-        assert command is not None and command[0] == f'"{executable}" "%1"'
+        assert command is not None and command[0] == f'"{launch_entry}" "%1"'
         targets = {str(path): str(shortcut_target(path)) for path in shortcuts}
-        assert all(Path(target) == executable for target in targets.values()), "Shortcut still targets the older copy"
+        assert all(Path(target) == launch_entry for target in targets.values()), "Shortcut still targets the older copy"
         assert defaults() == baseline_defaults, "Update changed extension defaults or UserChoice"
         return {"arp_version": arp_version[0], "owner_executable": str(executable),
                 "application_open_command": command[0], "shortcuts": targets,
@@ -323,7 +428,12 @@ def main(argv=None) -> int:
         assert old_gui.poll() is None, "Setup unexpectedly stopped the original running Luma"
         assert updated.previous_executable == old_executable and updated.root == context.root
         assert updated.executable in installed_executables(old_executable)
-        report["after"] = snapshot(updated.executable, CANDIDATE_VERSION)
+        stable_entry = install_root.resolve() / "Luma.exe"
+        selected = read_active_payload(install_root)
+        assert selected.executable == updated.executable and selected.version == CANDIDATE_VERSION
+        report["stable_launcher"] = {"path": str(stable_entry), "sha256": sha256(stable_entry),
+                                     "selected_payload": str(selected.executable)}
+        report["after"] = snapshot(updated.executable, CANDIDATE_VERSION, stable_entry)
         assert {str(path.relative_to(old_executable.parent)): sha256(path)
                 for path in old_executable.parent.rglob("*") if path.is_file()} == old_inventory, "Setup altered the loaded older payload"
         assert user_image.read_bytes() == IMAGE_BYTES
@@ -331,17 +441,24 @@ def main(argv=None) -> int:
         report["checks"].append("production apply helper completed Setup with old GUI/DLL live; shortcuts/ARP/owner advanced to 0.1.4 in the original root; old payload/images/settings/defaults retained")
 
         acknowledgment = launch_verified_update(updated.executable, CANDIDATE_VERSION,
-                                                  popen=spawn("candidate-gui"), timeout=30)
+                                                  launcher=stable_entry, popen=spawn("candidate-launcher-gui"), timeout=30)
         assert old_gui.poll() is None, "Old Luma disappeared before the new GUI was verified"
-        candidate_gui = next(process for purpose, process in captured if purpose == "candidate-gui")
-        assert acknowledgment.pid == candidate_gui.pid and visible_windows(candidate_gui.pid)
+        candidate_launcher = next(process for purpose, process in captured if purpose == "candidate-launcher-gui")
+        assert acknowledgment.launcher_pid == candidate_launcher.pid
+        assert acknowledgment.launcher_executable == stable_entry
+        assert acknowledgment.pid != candidate_launcher.pid and candidate_launcher.poll() is None
+        candidate_gui = OwnedLauncherChild(acknowledgment, candidate_launcher)
+        captured.append(("candidate-payload-gui", candidate_gui))
+        assert visible_windows(candidate_gui.pid)
         assert acknowledgment.os_executable == updated.executable, "Windows process image did not independently match the candidate"
         report["startup_acknowledgment"] = {"version": acknowledgment.version,
                                            "executable": str(acknowledgment.executable), "pid": acknowledgment.pid,
                                            "windows_process_image": str(acknowledgment.os_executable),
+                                           "launcher_pid": acknowledgment.launcher_pid,
+                                           "launcher_executable": str(acknowledgment.launcher_executable),
                                            "native_window_handles": [int(handle) for handle in visible_windows(candidate_gui.pid)]}
-        assert snapshot(updated.executable, CANDIDATE_VERSION)["owner_executable"] == str(updated.executable)
-        report["checks"].append("actual 0.1.4 frozen GUI painted and acknowledged its embedded version, exact managed executable and live PID; original GUI remained open")
+        assert snapshot(updated.executable, CANDIDATE_VERSION, stable_entry)["owner_executable"] == str(updated.executable)
+        report["checks"].append("stable root launched the actual 0.1.4 frozen GUI; its painted-window acknowledgment, independent OS image, direct parent PID and creation time matched; original GUI remained open")
 
         legacy_portable = work / "legacy-portable"
         shutil.copytree(old_executable.parent, legacy_portable, ignore=shutil.ignore_patterns("luma-install.json"))
@@ -371,6 +488,13 @@ def main(argv=None) -> int:
                         live_setups.append(purpose)
                         raise RuntimeError(f"{purpose} is still running; leave its files/state for disposable-runner teardown")
                 elif "gui" in purpose or "probe" in purpose:
+                    if (purpose == "candidate-launcher-gui" and updated is not None
+                            and process.poll() is None
+                            and not any(isinstance(item, OwnedLauncherChild) for _, item in captured)):
+                        child = capture_unacknowledged_child(process, updated.executable)
+                        if child is not None:
+                            captured.append(("unacknowledged-owned-payload", child))
+                            close_owned_gui(child)
                     close_owned_gui(process)
                 report.setdefault("process_exit_codes", {})[purpose] = process.poll()
             except Exception as error:
@@ -407,6 +531,9 @@ def main(argv=None) -> int:
                     winreg.DeleteValue(key, SETTING_NAME)
             except OSError as error:
                 report.setdefault("cleanup_errors", []).append(f"sentinel setting: {error}")
+        for _, process in captured:
+            if isinstance(process, OwnedLauncherChild):
+                process.close()
         for stream in streams:
             stream.close()
         if report.get("cleanup_errors"):

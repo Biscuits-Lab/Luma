@@ -28,7 +28,7 @@ from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
-from PySide6.QtCore import QObject, QStandardPaths, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QStandardPaths, Qt, QUrl, Signal, QTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QFrame, QWidget, QSizePolicy, QPushButton,
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from .i18n import tr, error_text
+from .settings_widgets import SettingsDialog
 from .update_installation import (
     InstallationError, ManagedUpdate, apply_verified_setup, detect_installation,
 )
@@ -129,6 +130,7 @@ class Release:
     archive: ReleaseAsset | None
     checksums: ReleaseAsset | None
     setup: ReleaseAsset | None = None
+    notes: str | None = None
 
     @property
     def downloadable(self):
@@ -200,7 +202,7 @@ def _transfer(url: str, limit: int, sink, *, expected_size: int | None = None,
     """Bounded streaming with validated redirects and no authentication headers."""
     _https_parts(url)
     opener = opener or build_opener(_SafeRedirectHandler(url, allow_cdn))
-    request = Request(url, headers={"User-Agent": "Luma-Updater", "Accept": "application/vnd.github+json" if url == LATEST_URL else "application/octet-stream", "Accept-Encoding": "identity"})
+    request = Request(url, headers={"User-Agent": "Luma-Updater", "Accept": "application/vnd.github+json" if url.startswith(f"https://api.github.com/repos/{REPOSITORY}/releases/") else "application/octet-stream", "Accept-Encoding": "identity"})
     started = time.monotonic()
     received = 0
     try:
@@ -290,7 +292,10 @@ def parse_release(data: dict) -> Release:
         if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest)):
             raise UpdateError(tr("A release asset has an invalid SHA-256 digest."))
         selected[name] = ReleaseAsset(name, url, size, digest[7:].lower() if digest else None)
-    return Release(version, tag, release_url, selected.get(f"Luma-{version}-windows-x64.zip"), selected.get("SHA256SUMS"), selected.get(f"Luma-{version}-windows-x64-setup.exe"))
+    from .release_notes import bounded_body
+    body = data.get("body")
+    notes = bounded_body(body) if body is None or isinstance(body, str) else None
+    return Release(version, tag, release_url, selected.get(f"Luma-{version}-windows-x64.zip"), selected.get("SHA256SUMS"), selected.get(f"Luma-{version}-windows-x64-setup.exe"), notes)
 
 
 def check_for_update(*, cancelled=lambda: False, opener=None) -> Release:
@@ -554,7 +559,7 @@ class _UpdateSignals(QObject):
     status = Signal(int, str)
 
 
-class UpdateDialog(QDialog):
+class UpdateDialog(SettingsDialog):
     """User-initiated only: opening Settings does not make any network request."""
     def __init__(self, parent, current_version: str):
         super().__init__(parent)
@@ -576,13 +581,13 @@ class UpdateDialog(QDialog):
         self._signals.status.connect(self._status)
         from .settings_widgets import (
             ActivityStatusLabel, DetailsPanel, DisplaySettingsPanel, SettingsCard,
-            SettingsCloseButton, badge, plain_label, settings_stylesheet,
+            SettingsCloseButton, SettingsHeader, badge, plain_label, settings_stylesheet,
         )
         self.setObjectName("luma_settings")
         self.setStyleSheet(settings_stylesheet())
         # Qt does not constrain an explicit resize to the usable desktop. At
         # high DPI the screen's geometry is already in logical pixels; leave
-        # space for native borders/titlebar and let the body scroll instead.
+        # a desktop gutter and let the body scroll instead.
         screen = parent.screen() if parent is not None else self.screen()
         width, height = 620, 310
         if screen is not None:
@@ -593,9 +598,12 @@ class UpdateDialog(QDialog):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 22, 24, 18)
         outer.setSpacing(12)
-        header = QHBoxLayout()
+        self.header = SettingsHeader(self)
+        header = QHBoxLayout(self.header)
+        header.setContentsMargins(0, 0, 0, 0)
         title = plain_label(tr("Settings"))
         title.setObjectName("settings_title")
+        title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         header.addWidget(title)
         header.addStretch()
         self.close_button = SettingsCloseButton()
@@ -603,7 +611,7 @@ class UpdateDialog(QDialog):
         self.close_button.setToolTip(tr("Close"))
         self.close_button.clicked.connect(self.reject)
         header.addWidget(self.close_button)
-        outer.addLayout(header)
+        outer.addWidget(self.header)
         self.scroll_area = QScrollArea(self)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll_area.setWidgetResizable(True)
@@ -630,9 +638,8 @@ class UpdateDialog(QDialog):
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(8)
         self.version_badge = badge(current_version)
-        header_row.addWidget(self.version_badge)
         header_row.addWidget(self.check_button)
-        self.update_card = SettingsCard(tr("Version & updates"), "update", accessory=header_actions)
+        self.update_card = SettingsCard(tr("Version & updates"), "update", accessory=header_actions, suffix=self.version_badge)
         update_layout = self.update_card.body
         self.status_label = ActivityStatusLabel()
         self.status_label.setObjectName("update_status")
@@ -656,16 +663,41 @@ class UpdateDialog(QDialog):
         self.release_button.hide()
         for widget in (self.download_button, self.launch_button, self.release_button):
             update_layout.addWidget(widget)
-        self.update_details = DetailsPanel(tr("About updates"))
-        self.description = plain_label(tr("Check the official GitHub repository for a stable Windows update.\nNo account or sign-in is required."), muted=True, wrap=True)
-        self.update_details.body.addWidget(self.description)
+        from .release_notes import ReleaseNotesPanel
+        self.update_details = ReleaseNotesPanel(current_version)
         update_layout.addWidget(self.update_details)
+        self._notes_restore_height = None
+        self._notes_grown_height = None
+        self._notes_reveal_timer = QTimer(self)
+        self._notes_reveal_timer.setSingleShot(True)
+        self._notes_reveal_timer.timeout.connect(self._reveal_notes)
+        self.update_details.toggle.toggled.connect(self._notes_visibility_changed)
         layout.addWidget(self.update_card)
         layout.addStretch(1)
         # Enter must not initiate an update or download accidentally.
         for button in self.findChildren(QPushButton):
             button.setAutoDefault(False)
         self.close_button.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _notes_visibility_changed(self, expanded):
+        if expanded:
+            self._notes_restore_height = self.height()
+            screen = self.screen()
+            limit = screen.availableGeometry().height() - 48 if screen else 620
+            self._notes_grown_height = min(max(self.height(), 510), max(240, limit))
+            self.resize(self.width(), self._notes_grown_height)
+            self._fit_available_screen()
+            self._notes_reveal_timer.start(0)
+        elif self._notes_restore_height is not None:
+            self._notes_reveal_timer.stop()
+            if self.height() == self._notes_grown_height:
+                self.resize(self.width(), self._notes_restore_height)
+                self._fit_available_screen()
+            self._notes_restore_height = None
+
+    def _reveal_notes(self):
+        if self.update_details.toggle.isChecked():
+            self.scroll_area.ensureWidgetVisible(self.update_details.text, 0, 8)
 
     def _start(self, function):
         if self._busy:
@@ -757,6 +789,10 @@ class UpdateDialog(QDialog):
             except UpdateError as error:
                 self.status_label.setText(str(error))
                 return
+            if newer or result.version == Version.parse(self.current_version):
+                self.update_details.set_release(str(result.version), result.notes)
+            else:
+                self.update_details.set_release(self.current_version)
             if not newer:
                 self.status_label.setText(tr("You're up to date. Latest stable release: {version}", version=result.version))
             elif sys.platform != "win32":
@@ -820,15 +856,18 @@ class UpdateDialog(QDialog):
     def launch(self):
         if not isinstance(self.installed, ManagedUpdate) or self._busy or sys.platform != "win32":
             return
-        executable = self.installed.executable
+        installed = self.installed
+        executable = installed.executable
         if executable.is_symlink() or not executable.is_file() or not executable.resolve().is_relative_to(self.installed.directory.resolve()):
             self.status_label.setText(tr("The installed application is missing or was moved. Please install the update again."))
             return
         self.status_label.setText(tr("Starting and verifying the new version…"))
         self._start(lambda cancelled, progress, status: launch_verified_update(
-            executable, self.installed.version, cancelled=cancelled))
+            executable, installed.version, launcher=installed.root / "Luma.exe",
+            cancelled=cancelled))
 
     def _cancel_work(self):
+        self.update_details.cancel_pending()
         self._cancel.set()
         self._serial += 1
 

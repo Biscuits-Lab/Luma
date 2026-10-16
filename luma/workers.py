@@ -5,6 +5,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import os
+import math
 from pathlib import Path
 import re
 import threading
@@ -13,12 +14,56 @@ from typing import Callable
 import numpy as np
 from PIL import Image, ImageOps
 from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QImage
 
 from .decoders import (DecodeCancelled, ImageData, SUPPORTED_EXTENSIONS,
                        RAW_EXTENSIONS, decode_image, render_rgba)
 
 
 _PARALLEL_RENDER_MIN_PIXELS = 8_000_000
+EXPOSURE_PREVIEW_EDGE = 1024
+EXPOSURE_PREVIEW_PIXELS = 393_216
+
+
+def exposure_preview(data, cancelled):
+    """Sample cached *linear* pixels once, with no full-source intermediate.
+
+    Center sampling intentionally favors low latency over preview antialiasing.
+    Exact source pixels are always rendered after interaction ends.
+    """
+    scale = min(1., EXPOSURE_PREVIEW_EDGE / max(data.width, data.height),
+                math.sqrt(EXPOSURE_PREVIEW_PIXELS / (data.width * data.height)))
+    if scale == 1.:
+        return data
+    if cancelled():
+        raise DecodeCancelled('Image operation cancelled.')
+    w, h = max(1, int(data.width * scale)), max(1, int(data.height * scale))
+    x = np.minimum(((np.arange(w) + .5) * data.width / w).astype(np.intp), data.width - 1)
+    y = np.minimum(((np.arange(h) + .5) * data.height / h).astype(np.intp), data.height - 1)
+    pixels = data.pixels[y[:, None], x[None, :]]
+    if cancelled():
+        raise DecodeCancelled('Image operation cancelled.')
+    return ImageData(data.path, pixels, data.linear, data.metadata, data.channel_names,
+                     photo_metadata=data.photo_metadata)
+
+
+def prepare_display_image(rgba, cancelled):
+    """Owning native Qt image, converted in cancellable worker-side bands."""
+    h, w = rgba.shape[:2]
+    image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    if image.isNull():
+        raise MemoryError('Could not allocate display image.')
+    destination = np.frombuffer(image.bits(), np.uint8).reshape(h, image.bytesPerLine())
+    for y in range(0, h, 128):
+        if cancelled():
+            raise DecodeCancelled('Image operation cancelled.')
+        block = rgba[y:y + 128]
+        converted = QImage(block.data, w, len(block), block.strides[0],
+                           QImage.Format.Format_RGBA8888).convertToFormat(
+                               QImage.Format.Format_ARGB32_Premultiplied)
+        destination[y:y + len(block), :w * 4] = np.frombuffer(
+            converted.constBits(), np.uint8).reshape(len(block), converted.bytesPerLine())[:, :w * 4]
+    return image
 
 
 class ByteCache:
@@ -137,6 +182,10 @@ class LatestWorker(QObject):
                 result = handler(payload, lambda: not self.current(token))
                 if not idle and self.current(token):
                     self.completed.emit(token, result)
+                # Queued Qt signals own their payload until delivery. Do not
+                # retain an oversized previous RGBA result while the next
+                # request allocates another output or while the worker is idle.
+                del result
             except Exception as error:
                 if not idle and self.current(token):
                     self.failed.emit(token, str(error) or type(error).__name__)
@@ -151,10 +200,11 @@ class RenderedFrame:
     metadata: dict
     channel_names: tuple
     photo_metadata: dict[str, str] = field(default_factory=dict)
+    image: object = None
 
     @property
     def nbytes(self):
-        return self.rgba.nbytes
+        return self.rgba.nbytes + (self.image.sizeInBytes() if self.image is not None else 0)
 
 
 def render_display_rgba(data, exposure, channel, tone, cancelled):
@@ -226,6 +276,8 @@ class ImageService:
         self.render_cache = ByteCache(budget // 2 if render_budget is None else render_budget)
         self.current_key = None
         self.current_image = None
+        self.preview_key = None
+        self.preview_image = None
 
     @staticmethod
     def _key(path):
@@ -236,11 +288,14 @@ class ImageService:
         return self._load(request, cancelled, activate=True)
 
     def _load(self, request, cancelled, *, activate):
-        path, exposure, channel, tone = request
+        path, exposure, channel, tone = request[:4]
+        preview = bool(request[4]) if len(request) > 4 else False
         if cancelled():
             return None
         key = self._key(path)
         render_key = (key, float(exposure), channel.upper(), tone.casefold())
+        if preview:
+            render_key += ('preview',)
         frame = self.render_cache.get(render_key)
         data = self.current_image if key == self.current_key else self.cache.get(key)
         if frame is None:
@@ -251,28 +306,44 @@ class ImageService:
                     # next native decode, rather than retaining two originals.
                     # Same-key edits and idle prefetch preserve the active data.
                     self.current_key, self.current_image = None, None
+                    self.preview_key, self.preview_image = None, None
                 data = decode_image(path, cancelled=cancelled)
                 if cancelled() or self._key(path) != key:
                     return None
                 self.cache.put(key, data)
+            if activate:
+                # Preserve the decoded source even if this render is superseded.
+                self.current_key, self.current_image = key, data
             if cancelled():
                 return None
-            rgba = render_display_rgba(data, exposure, channel, tone, cancelled)
+            render_data = data
+            if preview:
+                if self.preview_key != key or self.preview_image is None:
+                    self.preview_image = exposure_preview(data, cancelled)
+                    self.preview_key = key
+                render_data = self.preview_image
+            rgba = render_display_rgba(render_data, exposure, channel, tone, cancelled)
+            image = prepare_display_image(rgba, cancelled)
             if cancelled() or self._key(path) != key:
                 return None
             frame = RenderedFrame(rgba, data.width, data.height, data.linear,
-                                  data.metadata, data.channel_names, data.photo_metadata)
-            self.render_cache.put(render_key, frame)
+                                  data.metadata, data.channel_names, data.photo_metadata, image)
+            # Transient slider frames should never evict exact export frames.
+            if not preview:
+                self.render_cache.put(render_key, frame)
         if activate:
             # Active oversized images stay available for repeated exposure edits.
             self.current_key, self.current_image = key, data
         if cancelled():
             return None
         return dict(path=path, rgba=frame.rgba, width=frame.width, height=frame.height,
+                    image=frame.image, preview=preview,
                     linear=frame.linear, metadata=frame.metadata,
                     photo_metadata=frame.photo_metadata, render_key=render_key,
                     channel_names=frame.channel_names, cache_bytes=self.cache.bytes,
-                    render_cache_bytes=self.render_cache.bytes)
+                    render_cache_bytes=self.render_cache.bytes,
+                    preview_source_bytes=(self.preview_image.nbytes if self.preview_image is not None
+                                          and self.preview_image is not self.current_image else 0))
 
     def prefetch(self, request, cancelled):
         path = request[0]

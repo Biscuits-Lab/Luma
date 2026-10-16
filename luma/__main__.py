@@ -28,6 +28,15 @@ def main(argv=None):
             return 0
         except (InstallerError, shell.ShellIntegrationError, OSError):
             return 2
+    if args == ["--finalize-managed-uninstall"]:
+        from pathlib import Path
+        from . import shell_integration as shell
+        from .installer import InstallerError, finalize_managed_uninstall
+        try:
+            finalize_managed_uninstall(Path(sys.executable))
+            return 0
+        except (InstallerError, shell.ShellIntegrationError, OSError):
+            return 2
     from .app import main as viewer_main
     return viewer_main(args)
 

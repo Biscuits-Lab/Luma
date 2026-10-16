@@ -198,3 +198,38 @@ def test_registration_failure_keeps_diagnostics_without_removed_settings_route(q
         message.close()
     finally:
         window.close()
+
+
+def test_legacy_repair_panel_preserves_managed_root_activation(qapp, monkeypatch, tmp_path):
+    from luma import installer, update_installation
+    executable = tmp_path / 'versions' / '0.1.4-test' / 'Luma.exe'
+    context = update_installation.InstallationContext('managed', executable, tmp_path, '0.1.4')
+    monkeypatch.setattr(update_installation, 'detect_installation', lambda: context)
+    managed = Mock()
+    monkeypatch.setattr(installer, 'register_managed_installation', managed)
+    monkeypatch.setattr(settings.QMessageBox, 'question', lambda *a: QMessageBox.StandardButton.Yes)
+    panel, direct, _, _ = setup_panel(monkeypatch)
+    try:
+        panel._apply()
+        managed.assert_called_once_with(executable)
+        direct.assert_not_called()
+    finally:
+        panel.close()
+
+
+def test_legacy_repair_panel_never_treats_invalid_managed_marker_as_portable(qapp, monkeypatch):
+    from luma import update_installation
+    def invalid():
+        raise update_installation.InstallationError('damaged managed marker')
+    monkeypatch.setattr(update_installation, 'detect_installation', invalid)
+    monkeypatch.setattr(settings.QMessageBox, 'question', lambda *a: QMessageBox.StandardButton.Yes)
+    warning = Mock()
+    monkeypatch.setattr(settings.QMessageBox, 'warning', warning)
+    panel, direct, _, _ = setup_panel(monkeypatch)
+    try:
+        panel._apply()
+        direct.assert_not_called()
+        warning.assert_called_once()
+        assert 'damaged managed marker' in panel.status_label.text()
+    finally:
+        panel.close()

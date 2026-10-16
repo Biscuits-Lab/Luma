@@ -1,0 +1,1879 @@
+{
+  "date_utc": "2026-10-16",
+  "description": "Same-file current-working-tree exposure baseline versus bounded-preview candidate; Fit animation excluded from both snapshots.",
+  "conditions": "Three fresh processes per arm and synthetic size; baseline/current alternating in initial sweep; final candidate-only rerun serial after correctness/cache-compatibility and queued-payload-release changes. OS caches not evicted. Qt offscreen. Native Windows GPU/scanout and user file not measured.",
+  "baseline_source_hashes": {
+    "app.py": "1b0b05118293a49a60fa1e6c200eccd08bb2e799cf6c3d62c9c56e2ee26e0377",
+    "workers.py": "3e6df9547297cbbfa26f07bd6f40b1daca5e0caa97f8072f569c1fcd98b96742",
+    "canvas.py": "d9cc1f582190745860a21ec18e15e443cffa8c5f7bca921e71ca1dfda8a20444",
+    "decoders.py": "200f15d2abe274a2dc3f25a172599ae1d703918a9299824d42fd59eb72b69bf8",
+    "glass_backdrop.py": "fa41731bdb75c5a8210178fec3f1aa8f30ca537b42b3980ee1812cab5b0aee89",
+    "histogram.py": "d5ff0e6ef623f5714d27329d8685b361356e9efa7765cb26245f1dac3ff9eb73",
+    "i18n_viewer.py": "800b24be5165ef19d6c9990dbbee72dd44d3bf1c85542dbe0a8c9de50b020bcd"
+  },
+  "candidate_source_hashes": {
+    "app.py": "e62e3fd4eedcec8132fb45f0919ab16a5de5f83b5b9e9062720dd82bff50daa2",
+    "workers.py": "de18dd076b6f721eedf3eb97580df40cd1a8acbb2139066899bd7385290ce1eb",
+    "canvas.py": "33e793b824b9ee8c1dccf448f553de4f76f936e30d6750ae44bdc82f4c5ea91c",
+    "decoders.py": "200f15d2abe274a2dc3f25a172599ae1d703918a9299824d42fd59eb72b69bf8",
+    "glass_backdrop.py": "3252eb54bc18dda3e92925f1ec859bd3a6e354fbc30dfaa04f39eed73f9c913c",
+    "histogram.py": "d5ff0e6ef623f5714d27329d8685b361356e9efa7765cb26245f1dac3ff9eb73",
+    "i18n_viewer.py": "852e4a1ac96ffda1e63bda27ccb14dd3756fc1ee9f0b6de7f19a90dd05272004"
+  },
+  "fixture_recipes": {
+    "4K": "scripts/benchmark_exr_decode.py generate: 4096x2048 HALF ZIP RGBA; seed 20261016; 32-row strips; nonzero dataWindow; fractional alpha",
+    "8K square": "scripts/generate_exr_moderate_fixture.py default: 8192 square HALF RGBA ZIP; seed 20261016; 32-row strips",
+    "16K panorama": {
+      "fixture": "moderate-16384x4096-HALF-ZIP.exr",
+      "width": 16384,
+      "height": 4096,
+      "channels": "RGBA",
+      "sample_type": "HALF",
+      "compression": "ZIP",
+      "seed": 20261016,
+      "strip_rows": 32,
+      "openexr": "3.5.2",
+      "size_bytes": 61741717,
+      "sha256": "de49f9b7f02c3a38e821434eca2593413a98755887d1cd7708fc69e6ead2d165",
+      "generation_s": 4.525946683999791,
+      "recipe": "Same bounded moderate generator pixel recipe at 16384x4096, standalone generator edge guard set to 16384; viewer decode guard unchanged"
+    }
+  },
+  "summary": [
+    {
+      "case": "4K",
+      "dimensions": [
+        4096,
+        2048
+      ],
+      "baseline": {
+        "first_feedback_median_ms": 218.82266199827427,
+        "exact_median_ms": 218.82266199827427,
+        "ui_install_max_ms": 8.811532003164757,
+        "ui_heartbeat_gap_max_ms": 20.874681998975575,
+        "peak_rss_max_mib": 503.30078125,
+        "drag_updates": [
+          0,
+          0,
+          0
+        ],
+        "release_to_exact_median_ms": 208.3964420016855,
+        "drag_preview_median_ms": null
+      },
+      "candidate": {
+        "first_feedback_median_ms": 24.83093299815664,
+        "exact_median_ms": 338.4055439964868,
+        "ui_install_max_ms": 3.9837540025473572,
+        "ui_heartbeat_gap_max_ms": 17.21647899830714,
+        "peak_rss_max_mib": 486.34375,
+        "drag_updates": [
+          25,
+          26,
+          25
+        ],
+        "release_to_exact_median_ms": 339.54886999708833,
+        "drag_preview_median_ms": 21.514216998184565
+      }
+    },
+    {
+      "case": "8K square",
+      "dimensions": [
+        8192,
+        8192
+      ],
+      "baseline": {
+        "first_feedback_median_ms": 1330.1463750030962,
+        "exact_median_ms": 1330.1463750030962,
+        "ui_install_max_ms": 175.52966599760111,
+        "ui_heartbeat_gap_max_ms": 182.6631859948975,
+        "peak_rss_max_mib": 2249.88671875,
+        "drag_updates": [
+          0,
+          0,
+          0
+        ],
+        "release_to_exact_median_ms": 1266.2108579970663,
+        "drag_preview_median_ms": null
+      },
+      "candidate": {
+        "first_feedback_median_ms": 32.27680900454288,
+        "exact_median_ms": 1409.3002829977195,
+        "ui_install_max_ms": 29.300520996912383,
+        "ui_heartbeat_gap_max_ms": 41.167210998537485,
+        "peak_rss_max_mib": 2030.20703125,
+        "drag_updates": [
+          22,
+          24,
+          26
+        ],
+        "release_to_exact_median_ms": 1412.4137639955734,
+        "drag_preview_median_ms": 22.64553999702912
+      }
+    },
+    {
+      "case": "16K panorama",
+      "dimensions": [
+        16384,
+        4096
+      ],
+      "baseline": {
+        "first_feedback_median_ms": 1323.038822003582,
+        "exact_median_ms": 1323.038822003582,
+        "ui_install_max_ms": 156.79168800124899,
+        "ui_heartbeat_gap_max_ms": 166.0285720063257,
+        "peak_rss_max_mib": 2305.69921875,
+        "drag_updates": [
+          0,
+          0,
+          0
+        ],
+        "release_to_exact_median_ms": 1382.5532199989539,
+        "drag_preview_median_ms": null
+      },
+      "candidate": {
+        "first_feedback_median_ms": 25.80788899649633,
+        "exact_median_ms": 1447.1821479965001,
+        "ui_install_max_ms": 12.065759001416154,
+        "ui_heartbeat_gap_max_ms": 38.75059599522501,
+        "peak_rss_max_mib": 2009.05078125,
+        "drag_updates": [
+          27,
+          20,
+          22
+        ],
+        "release_to_exact_median_ms": 1418.149697004992,
+        "drag_preview_median_ms": 21.835509498487227
+      }
+    }
+  ],
+  "all_final_rgba_byte_identical": true,
+  "all_edit_sequences_decoded_once": true,
+  "samples": [
+    {
+      "label": "baseline",
+      "fixture": "moderate-16384x4096-HALF-ZIP.exr",
+      "fixture_sha256": "de49f9b7f02c3a38e821434eca2593413a98755887d1cd7708fc69e6ead2d165",
+      "width": 16384,
+      "height": 4096,
+      "source_bytes": 1073741824,
+      "opening_ms": 2020.688541000709,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 1273.4820939949714,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1273.4820939949714,
+          "ui_install_max_ms": 152.53678299632156,
+          "ui_heartbeat_gap_max_ms": 158.65468400443206,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1050.7281259997399,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 1201.0776690003695,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1201.0776690003695,
+          "ui_install_max_ms": 144.76889800425852,
+          "ui_heartbeat_gap_max_ms": 149.9294919995009,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 986.0758619979606,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 1135.814676003065,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1135.814676003065,
+          "ui_install_max_ms": 142.08402400254272,
+          "ui_heartbeat_gap_max_ms": 151.425575997564,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 923.0521009958466,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 1315.7534019992454,
+        "input_to_exact_ms": 1367.2131269995589,
+        "ui_install_max_ms": 153.58743500109995,
+        "ui_heartbeat_gap_max_ms": 166.8877930060262,
+        "cancelled_render_count": 1,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "cee93e0f1640454057a27b0532d652441f63c3f90984ec645823f63dd1457798",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 2305.69921875,
+      "validation_peak_rss_mib": 2305.69921875,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 1
+    },
+    {
+      "label": "baseline",
+      "fixture": "moderate-16384x4096-HALF-ZIP.exr",
+      "fixture_sha256": "de49f9b7f02c3a38e821434eca2593413a98755887d1cd7708fc69e6ead2d165",
+      "width": 16384,
+      "height": 4096,
+      "source_bytes": 1073741824,
+      "opening_ms": 2165.752931003226,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 1356.7129459988791,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1356.7129459988791,
+          "ui_install_max_ms": 156.79168800124899,
+          "ui_heartbeat_gap_max_ms": 166.0285720063257,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1126.2700219958788,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 1323.038822003582,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1323.038822003582,
+          "ui_install_max_ms": 148.50994600419654,
+          "ui_heartbeat_gap_max_ms": 157.6105789936264,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1104.3402979994426,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 1291.5187609978602,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1291.5187609978602,
+          "ui_install_max_ms": 149.19434899638873,
+          "ui_heartbeat_gap_max_ms": 160.1798819974647,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1069.133105003857,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 1466.5927269961685,
+        "input_to_exact_ms": 1467.076727996755,
+        "ui_install_max_ms": 167.9624309981591,
+        "ui_heartbeat_gap_max_ms": 179.776454999228,
+        "cancelled_render_count": 1,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "cee93e0f1640454057a27b0532d652441f63c3f90984ec645823f63dd1457798",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 2299.765625,
+      "validation_peak_rss_mib": 2299.765625,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 2
+    },
+    {
+      "label": "baseline",
+      "fixture": "moderate-16384x4096-HALF-ZIP.exr",
+      "fixture_sha256": "de49f9b7f02c3a38e821434eca2593413a98755887d1cd7708fc69e6ead2d165",
+      "width": 16384,
+      "height": 4096,
+      "source_bytes": 1073741824,
+      "opening_ms": 2207.907950003573,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 1460.2039819947095,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1460.2039819947095,
+          "ui_install_max_ms": 143.98438100033673,
+          "ui_heartbeat_gap_max_ms": 155.2040459937416,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1247.4134450021666,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 1402.6782239961904,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1402.6782239961904,
+          "ui_install_max_ms": 148.72707999893464,
+          "ui_heartbeat_gap_max_ms": 160.78310300508747,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1182.8612249955768,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 1341.0044569973252,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1341.0044569973252,
+          "ui_install_max_ms": 139.5613479980966,
+          "ui_heartbeat_gap_max_ms": 144.0265989949694,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1125.9805489971768,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 1382.5532199989539,
+        "input_to_exact_ms": 1408.2984999986365,
+        "ui_install_max_ms": 158.67069399973843,
+        "ui_heartbeat_gap_max_ms": 169.9143899968476,
+        "cancelled_render_count": 0,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "cee93e0f1640454057a27b0532d652441f63c3f90984ec645823f63dd1457798",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 2223.6171875,
+      "validation_peak_rss_mib": 2223.6171875,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 3
+    },
+    {
+      "label": "candidate",
+      "fixture": "moderate-16384x4096-HALF-ZIP.exr",
+      "fixture_sha256": "de49f9b7f02c3a38e821434eca2593413a98755887d1cd7708fc69e6ead2d165",
+      "width": 16384,
+      "height": 4096,
+      "source_bytes": 1073741824,
+      "opening_ms": 2104.2197049973765,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 25.80788899649633,
+          "input_to_preview_ms": 25.80788899649633,
+          "input_to_exact_ms": 1415.897359001974,
+          "ui_install_max_ms": 11.32629700441612,
+          "ui_heartbeat_gap_max_ms": 22.286302999418695,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 262144,
+              "render_ms": 10.692310002923477,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1093.2334879980772,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 19.358899000508245,
+          "input_to_preview_ms": 19.358899000508245,
+          "input_to_exact_ms": 1423.6589439969976,
+          "ui_install_max_ms": 8.53074599581305,
+          "ui_heartbeat_gap_max_ms": 20.27529499900993,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 262144,
+              "render_ms": 8.68659200205002,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1106.1423999999533,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 20.356998000352178,
+          "input_to_preview_ms": 20.356998000352178,
+          "input_to_exact_ms": 1410.9173739998369,
+          "ui_install_max_ms": 9.465577997616492,
+          "ui_heartbeat_gap_max_ms": 20.208128000376746,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 262144,
+              "render_ms": 8.291375997941941,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1092.6482490031049,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 27,
+        "accepted_frames_during_drag": 27,
+        "input_to_preview_median_ms": 19.92649799649371,
+        "input_to_preview_max_ms": 24.885614002414513,
+        "release_to_exact_ms": 1391.7487150029046,
+        "input_to_exact_ms": 1411.1403650022112,
+        "ui_install_max_ms": 9.525970999675337,
+        "ui_heartbeat_gap_max_ms": 17.841184002463706,
+        "cancelled_render_count": 3,
+        "completed_render_count": 28
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "cee93e0f1640454057a27b0532d652441f63c3f90984ec645823f63dd1457798",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 4194304,
+      "peak_rss_mib": 2007.07421875,
+      "validation_peak_rss_mib": 2261.87890625,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 1
+    },
+    {
+      "label": "candidate",
+      "fixture": "moderate-16384x4096-HALF-ZIP.exr",
+      "fixture_sha256": "de49f9b7f02c3a38e821434eca2593413a98755887d1cd7708fc69e6ead2d165",
+      "width": 16384,
+      "height": 4096,
+      "source_bytes": 1073741824,
+      "opening_ms": 2323.464341003273,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 34.58914800285129,
+          "input_to_preview_ms": 34.58914800285129,
+          "input_to_exact_ms": 1638.6661590004223,
+          "ui_install_max_ms": 10.772109999379609,
+          "ui_heartbeat_gap_max_ms": 38.75059599522501,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 262144,
+              "render_ms": 11.755425002775155,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1268.6035660008201,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 32.85910600243369,
+          "input_to_preview_ms": 32.85910600243369,
+          "input_to_exact_ms": 1654.25271300046,
+          "ui_install_max_ms": 8.188131003407761,
+          "ui_heartbeat_gap_max_ms": 30.238756000471767,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 262144,
+              "render_ms": 10.259953996865079,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1342.8981260003638,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 21.038619001046754,
+          "input_to_preview_ms": 21.038619001046754,
+          "input_to_exact_ms": 1447.1821479965001,
+          "ui_install_max_ms": 10.657858001650311,
+          "ui_heartbeat_gap_max_ms": 20.43565799976932,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 262144,
+              "render_ms": 8.737209005630575,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1129.4238039990887,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 20,
+        "accepted_frames_during_drag": 20,
+        "input_to_preview_median_ms": 22.342964501149254,
+        "input_to_preview_max_ms": 32.95066499413224,
+        "release_to_exact_ms": 1418.149697004992,
+        "input_to_exact_ms": 1430.029690003721,
+        "ui_install_max_ms": 10.661398999218363,
+        "ui_heartbeat_gap_max_ms": 21.37806599785108,
+        "cancelled_render_count": 7,
+        "completed_render_count": 23
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "cee93e0f1640454057a27b0532d652441f63c3f90984ec645823f63dd1457798",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 4194304,
+      "peak_rss_mib": 1986.10546875,
+      "validation_peak_rss_mib": 2241.75,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 2
+    },
+    {
+      "label": "candidate",
+      "fixture": "moderate-16384x4096-HALF-ZIP.exr",
+      "fixture_sha256": "de49f9b7f02c3a38e821434eca2593413a98755887d1cd7708fc69e6ead2d165",
+      "width": 16384,
+      "height": 4096,
+      "source_bytes": 1073741824,
+      "opening_ms": 2229.1092399973422,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 31.988103000912815,
+          "input_to_preview_ms": 31.988103000912815,
+          "input_to_exact_ms": 1565.1049349980894,
+          "ui_install_max_ms": 8.582946000387892,
+          "ui_heartbeat_gap_max_ms": 19.522565002262127,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 262144,
+              "render_ms": 11.12585500231944,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1239.9305029975949,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 22.692054997605737,
+          "input_to_preview_ms": 22.692054997605737,
+          "input_to_exact_ms": 1679.815196999698,
+          "ui_install_max_ms": 10.402542997326236,
+          "ui_heartbeat_gap_max_ms": 19.64951700210804,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 262144,
+              "render_ms": 9.526861002086662,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1338.7570960039739,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 26.449878001585603,
+          "input_to_preview_ms": 26.449878001585603,
+          "input_to_exact_ms": 1433.4630349985673,
+          "ui_install_max_ms": 12.065759001416154,
+          "ui_heartbeat_gap_max_ms": 26.429176999954507,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 262144,
+              "render_ms": 14.157395999063738,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1091.8998429988278,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 22,
+        "accepted_frames_during_drag": 22,
+        "input_to_preview_median_ms": 21.835509498487227,
+        "input_to_preview_max_ms": 26.13059099530801,
+        "release_to_exact_ms": 1595.7222249999177,
+        "input_to_exact_ms": 1595.8994019965758,
+        "ui_install_max_ms": 11.852967996674124,
+        "ui_heartbeat_gap_max_ms": 17.41672700154595,
+        "cancelled_render_count": 4,
+        "completed_render_count": 26
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "cee93e0f1640454057a27b0532d652441f63c3f90984ec645823f63dd1457798",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 4194304,
+      "peak_rss_mib": 2009.05078125,
+      "validation_peak_rss_mib": 2264.71875,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 3
+    },
+    {
+      "label": "baseline",
+      "fixture": "structured-4096x2048-HALF-ZIP.exr",
+      "fixture_sha256": "9fdf7d4ca74b562f0ca8d4ed6d8f01d7fa7fcd1e5cf58edaf9f088cae4f147ea",
+      "width": 4096,
+      "height": 2048,
+      "source_bytes": 134217728,
+      "opening_ms": 281.9775190000655,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 219.15257700311486,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 219.15257700311486,
+          "ui_install_max_ms": 7.534604003012646,
+          "ui_heartbeat_gap_max_ms": 18.248736996611115,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 8388608,
+              "render_ms": 141.77379199827556,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 229.4840739996289,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 229.4840739996289,
+          "ui_install_max_ms": 8.811532003164757,
+          "ui_heartbeat_gap_max_ms": 20.861806995526422,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 8388608,
+              "render_ms": 150.0629599977401,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 208.2396339974366,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 208.2396339974366,
+          "ui_install_max_ms": 7.964652999362443,
+          "ui_heartbeat_gap_max_ms": 17.92276500054868,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 8388608,
+              "render_ms": 132.18652899377048,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 237.54074500175193,
+        "input_to_exact_ms": 262.2762840037467,
+        "ui_install_max_ms": 15.446978002728429,
+        "ui_heartbeat_gap_max_ms": 29.139291997125838,
+        "cancelled_render_count": 0,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "82ee4d4106fd0e17edfe42f48c2d40a847b1cb83eac501ebf89ad54eb3797638",
+      "cache_bytes": 134217728,
+      "render_cache_bytes": 134217728,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 502.65625,
+      "validation_peak_rss_mib": 502.65625,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 1
+    },
+    {
+      "label": "baseline",
+      "fixture": "structured-4096x2048-HALF-ZIP.exr",
+      "fixture_sha256": "9fdf7d4ca74b562f0ca8d4ed6d8f01d7fa7fcd1e5cf58edaf9f088cae4f147ea",
+      "width": 4096,
+      "height": 2048,
+      "source_bytes": 134217728,
+      "opening_ms": 277.6959149996401,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 225.40465299971402,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 225.40465299971402,
+          "ui_install_max_ms": 7.743069996649865,
+          "ui_heartbeat_gap_max_ms": 17.5084729999071,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 8388608,
+              "render_ms": 145.10722999693826,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 220.31646200048272,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 220.31646200048272,
+          "ui_install_max_ms": 7.855500000005122,
+          "ui_heartbeat_gap_max_ms": 12.46381700184429,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 8388608,
+              "render_ms": 141.3401870013331,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 214.9025230028201,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 214.9025230028201,
+          "ui_install_max_ms": 8.626984999864362,
+          "ui_heartbeat_gap_max_ms": 19.41976899979636,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 8388608,
+              "render_ms": 134.78866800141986,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 208.3964420016855,
+        "input_to_exact_ms": 232.65859200182604,
+        "ui_install_max_ms": 9.08103600522736,
+        "ui_heartbeat_gap_max_ms": 20.175158999336418,
+        "cancelled_render_count": 0,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "82ee4d4106fd0e17edfe42f48c2d40a847b1cb83eac501ebf89ad54eb3797638",
+      "cache_bytes": 134217728,
+      "render_cache_bytes": 134217728,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 501.22265625,
+      "validation_peak_rss_mib": 501.22265625,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 2
+    },
+    {
+      "label": "baseline",
+      "fixture": "structured-4096x2048-HALF-ZIP.exr",
+      "fixture_sha256": "9fdf7d4ca74b562f0ca8d4ed6d8f01d7fa7fcd1e5cf58edaf9f088cae4f147ea",
+      "width": 4096,
+      "height": 2048,
+      "source_bytes": 134217728,
+      "opening_ms": 294.99249599757604,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 218.82266199827427,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 218.82266199827427,
+          "ui_install_max_ms": 8.200919997761957,
+          "ui_heartbeat_gap_max_ms": 18.35000100254547,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 8388608,
+              "render_ms": 141.236398005276,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 218.68523900047876,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 218.68523900047876,
+          "ui_install_max_ms": 8.715556999959517,
+          "ui_heartbeat_gap_max_ms": 20.874681998975575,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 8388608,
+              "render_ms": 141.12179100629874,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 211.09294299822068,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 211.09294299822068,
+          "ui_install_max_ms": 8.797285001492128,
+          "ui_heartbeat_gap_max_ms": 18.5918959978153,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 8388608,
+              "render_ms": 128.76107599731768,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 196.614968997892,
+        "input_to_exact_ms": 221.14188900013687,
+        "ui_install_max_ms": 7.504344001063146,
+        "ui_heartbeat_gap_max_ms": 18.747006004559807,
+        "cancelled_render_count": 0,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "82ee4d4106fd0e17edfe42f48c2d40a847b1cb83eac501ebf89ad54eb3797638",
+      "cache_bytes": 134217728,
+      "render_cache_bytes": 134217728,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 503.30078125,
+      "validation_peak_rss_mib": 503.30078125,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 3
+    },
+    {
+      "label": "candidate",
+      "fixture": "structured-4096x2048-HALF-ZIP.exr",
+      "fixture_sha256": "9fdf7d4ca74b562f0ca8d4ed6d8f01d7fa7fcd1e5cf58edaf9f088cae4f147ea",
+      "width": 4096,
+      "height": 2048,
+      "source_bytes": 134217728,
+      "opening_ms": 319.0577179993852,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 30.380375996173825,
+          "input_to_preview_ms": 30.380375996173825,
+          "input_to_exact_ms": 359.4900679963757,
+          "ui_install_max_ms": 3.44565199338831,
+          "ui_heartbeat_gap_max_ms": 12.958843006344978,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 392498,
+              "render_ms": 15.906832995824516,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 8388608,
+              "render_ms": 148.19633899605833,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 27.06761100125732,
+          "input_to_preview_ms": 27.06761100125732,
+          "input_to_exact_ms": 331.7945359958685,
+          "ui_install_max_ms": 3.709659999003634,
+          "ui_heartbeat_gap_max_ms": 17.21647899830714,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 392498,
+              "render_ms": 15.485176001675427,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 8388608,
+              "render_ms": 138.0303929981892,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 23.04503300547367,
+          "input_to_preview_ms": 23.04503300547367,
+          "input_to_exact_ms": 326.44886600610334,
+          "ui_install_max_ms": 2.5331940050818957,
+          "ui_heartbeat_gap_max_ms": 13.43211199855432,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 392498,
+              "render_ms": 14.054836996365339,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 8388608,
+              "render_ms": 134.1838669977733,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 25,
+        "accepted_frames_during_drag": 25,
+        "input_to_preview_median_ms": 21.473845998116303,
+        "input_to_preview_max_ms": 30.333010996400844,
+        "release_to_exact_ms": 336.97212200058857,
+        "input_to_exact_ms": 362.00917300448054,
+        "ui_install_max_ms": 2.8956520036445,
+        "ui_heartbeat_gap_max_ms": 19.596543002990074,
+        "cancelled_render_count": 3,
+        "completed_render_count": 28
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "82ee4d4106fd0e17edfe42f48c2d40a847b1cb83eac501ebf89ad54eb3797638",
+      "cache_bytes": 134217728,
+      "render_cache_bytes": 134217728,
+      "preview_source_bytes": 6279968,
+      "peak_rss_mib": 486.34375,
+      "validation_peak_rss_mib": 486.34375,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 1
+    },
+    {
+      "label": "candidate",
+      "fixture": "structured-4096x2048-HALF-ZIP.exr",
+      "fixture_sha256": "9fdf7d4ca74b562f0ca8d4ed6d8f01d7fa7fcd1e5cf58edaf9f088cae4f147ea",
+      "width": 4096,
+      "height": 2048,
+      "source_bytes": 134217728,
+      "opening_ms": 277.38797899655765,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 28.828860995417926,
+          "input_to_preview_ms": 28.828860995417926,
+          "input_to_exact_ms": 338.4055439964868,
+          "ui_install_max_ms": 2.805023999826517,
+          "ui_heartbeat_gap_max_ms": 14.803494996158406,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 392498,
+              "render_ms": 14.716753998072818,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 8388608,
+              "render_ms": 131.3140400015982,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 21.871814999030903,
+          "input_to_preview_ms": 21.871814999030903,
+          "input_to_exact_ms": 354.73930300213397,
+          "ui_install_max_ms": 2.9379140032688156,
+          "ui_heartbeat_gap_max_ms": 15.178605004621204,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 392498,
+              "render_ms": 15.066637002746575,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 8388608,
+              "render_ms": 165.55490999598987,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 22.08202300244011,
+          "input_to_preview_ms": 22.08202300244011,
+          "input_to_exact_ms": 331.4166500058491,
+          "ui_install_max_ms": 2.6904510013991967,
+          "ui_heartbeat_gap_max_ms": 14.73457099928055,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 392498,
+              "render_ms": 13.658446994668338,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 8388608,
+              "render_ms": 135.69664999522502,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 26,
+        "accepted_frames_during_drag": 26,
+        "input_to_preview_median_ms": 21.514216998184565,
+        "input_to_preview_max_ms": 25.991943999542855,
+        "release_to_exact_ms": 339.54886999708833,
+        "input_to_exact_ms": 359.80661799840163,
+        "ui_install_max_ms": 3.3368770018569194,
+        "ui_heartbeat_gap_max_ms": 17.184995995194186,
+        "cancelled_render_count": 4,
+        "completed_render_count": 27
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "82ee4d4106fd0e17edfe42f48c2d40a847b1cb83eac501ebf89ad54eb3797638",
+      "cache_bytes": 134217728,
+      "render_cache_bytes": 134217728,
+      "preview_source_bytes": 6279968,
+      "peak_rss_mib": 480.0625,
+      "validation_peak_rss_mib": 480.0625,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 2
+    },
+    {
+      "label": "candidate",
+      "fixture": "structured-4096x2048-HALF-ZIP.exr",
+      "fixture_sha256": "9fdf7d4ca74b562f0ca8d4ed6d8f01d7fa7fcd1e5cf58edaf9f088cae4f147ea",
+      "width": 4096,
+      "height": 2048,
+      "source_bytes": 134217728,
+      "opening_ms": 296.02932700072415,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 31.068559001141693,
+          "input_to_preview_ms": 31.068559001141693,
+          "input_to_exact_ms": 337.35006200004136,
+          "ui_install_max_ms": 2.350547998503316,
+          "ui_heartbeat_gap_max_ms": 11.997610003163572,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 392498,
+              "render_ms": 16.815793998830486,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 8388608,
+              "render_ms": 147.4889239980257,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 20.152671000687405,
+          "input_to_preview_ms": 20.152671000687405,
+          "input_to_exact_ms": 347.5070249987766,
+          "ui_install_max_ms": 3.9837540025473572,
+          "ui_heartbeat_gap_max_ms": 14.172333001624793,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 392498,
+              "render_ms": 13.326196996786166,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 8388608,
+              "render_ms": 149.65632199891843,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 24.83093299815664,
+          "input_to_preview_ms": 24.83093299815664,
+          "input_to_exact_ms": 373.5076679949998,
+          "ui_install_max_ms": 3.9698629989288747,
+          "ui_heartbeat_gap_max_ms": 16.72130099905189,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 392498,
+              "render_ms": 16.046753000409808,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 8388608,
+              "render_ms": 159.51980599493254,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 25,
+        "accepted_frames_during_drag": 25,
+        "input_to_preview_median_ms": 21.541007001360413,
+        "input_to_preview_max_ms": 26.017282994871493,
+        "release_to_exact_ms": 353.02726599911693,
+        "input_to_exact_ms": 373.95248399843695,
+        "ui_install_max_ms": 3.0009600013727322,
+        "ui_heartbeat_gap_max_ms": 14.1450730006909,
+        "cancelled_render_count": 4,
+        "completed_render_count": 27
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "82ee4d4106fd0e17edfe42f48c2d40a847b1cb83eac501ebf89ad54eb3797638",
+      "cache_bytes": 134217728,
+      "render_cache_bytes": 134217728,
+      "preview_source_bytes": 6279968,
+      "peak_rss_mib": 485.05078125,
+      "validation_peak_rss_mib": 485.05078125,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 3
+    },
+    {
+      "label": "baseline",
+      "fixture": "moderate-8192x8192-HALF-ZIP.exr",
+      "fixture_sha256": "096d2e3de82e65a87f9ff78c57308c1e5ca01cd3b1455a28c6928ca90af8b726",
+      "width": 8192,
+      "height": 8192,
+      "source_bytes": 1073741824,
+      "opening_ms": 2089.1482649967656,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 1294.4939949957188,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1294.4939949957188,
+          "ui_install_max_ms": 146.3075840001693,
+          "ui_heartbeat_gap_max_ms": 156.0133550010505,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1080.265953001799,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 1330.1463750030962,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1330.1463750030962,
+          "ui_install_max_ms": 170.14188499888405,
+          "ui_heartbeat_gap_max_ms": 179.58045699924696,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1085.4399179952452,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 1382.2105849976651,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1382.2105849976651,
+          "ui_install_max_ms": 175.52966599760111,
+          "ui_heartbeat_gap_max_ms": 180.8768280025106,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1137.3726519959746,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 1238.3119529986288,
+        "input_to_exact_ms": 1288.2800709994626,
+        "ui_install_max_ms": 145.92266899853712,
+        "ui_heartbeat_gap_max_ms": 155.8774799996172,
+        "cancelled_render_count": 0,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "4103fe421d4c28efb82b8a8a580e8b2a1c14e280b4bf1ec8444527dd39b3b5de",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 2249.88671875,
+      "validation_peak_rss_mib": 2249.88671875,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 1
+    },
+    {
+      "label": "baseline",
+      "fixture": "moderate-8192x8192-HALF-ZIP.exr",
+      "fixture_sha256": "096d2e3de82e65a87f9ff78c57308c1e5ca01cd3b1455a28c6928ca90af8b726",
+      "width": 8192,
+      "height": 8192,
+      "source_bytes": 1073741824,
+      "opening_ms": 2161.468733997026,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 1324.6933490008814,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1324.6933490008814,
+          "ui_install_max_ms": 170.6447040050989,
+          "ui_heartbeat_gap_max_ms": 182.6631859948975,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1086.2971290043788,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 1398.9914269986912,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1398.9914269986912,
+          "ui_install_max_ms": 164.1051249971497,
+          "ui_heartbeat_gap_max_ms": 180.1887990004616,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1164.8324900015723,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 1407.3108500015223,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1407.3108500015223,
+          "ui_install_max_ms": 144.29201900202315,
+          "ui_heartbeat_gap_max_ms": 149.6088839994627,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1193.3575080038281,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 1266.2108579970663,
+        "input_to_exact_ms": 1291.5527630029828,
+        "ui_install_max_ms": 157.67634200165048,
+        "ui_heartbeat_gap_max_ms": 168.2911360039725,
+        "cancelled_render_count": 0,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "4103fe421d4c28efb82b8a8a580e8b2a1c14e280b4bf1ec8444527dd39b3b5de",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 2247.375,
+      "validation_peak_rss_mib": 2247.375,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 2
+    },
+    {
+      "label": "baseline",
+      "fixture": "moderate-8192x8192-HALF-ZIP.exr",
+      "fixture_sha256": "096d2e3de82e65a87f9ff78c57308c1e5ca01cd3b1455a28c6928ca90af8b726",
+      "width": 8192,
+      "height": 8192,
+      "source_bytes": 1073741824,
+      "opening_ms": 2167.0148209959734,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 1333.02017099777,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1333.02017099777,
+          "ui_install_max_ms": 148.21113100333605,
+          "ui_heartbeat_gap_max_ms": 157.62689600524027,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1114.1262320015812,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 1107.229624001775,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1107.229624001775,
+          "ui_install_max_ms": 138.43862600333523,
+          "ui_heartbeat_gap_max_ms": 143.49299899913603,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 893.4839969952009,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 1283.0722240032628,
+          "input_to_preview_ms": null,
+          "input_to_exact_ms": 1283.0722240032628,
+          "ui_install_max_ms": 137.42230299976654,
+          "ui_heartbeat_gap_max_ms": 146.28902899858076,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1076.0910300014075,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 0,
+        "accepted_frames_during_drag": 0,
+        "input_to_preview_median_ms": null,
+        "input_to_preview_max_ms": null,
+        "release_to_exact_ms": 1489.1400909982622,
+        "input_to_exact_ms": 1538.8620869998704,
+        "ui_install_max_ms": 162.12867099966388,
+        "ui_heartbeat_gap_max_ms": 171.43114999635145,
+        "cancelled_render_count": 0,
+        "completed_render_count": 1
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "4103fe421d4c28efb82b8a8a580e8b2a1c14e280b4bf1ec8444527dd39b3b5de",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 0,
+      "peak_rss_mib": 2249.23828125,
+      "validation_peak_rss_mib": 2249.23828125,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 3
+    },
+    {
+      "label": "candidate",
+      "fixture": "moderate-8192x8192-HALF-ZIP.exr",
+      "fixture_sha256": "096d2e3de82e65a87f9ff78c57308c1e5ca01cd3b1455a28c6928ca90af8b726",
+      "width": 8192,
+      "height": 8192,
+      "source_bytes": 1073741824,
+      "opening_ms": 2125.8640689993626,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 42.70291199645726,
+          "input_to_preview_ms": 42.70291199645726,
+          "input_to_exact_ms": 1379.0390400026808,
+          "ui_install_max_ms": 9.02335100545315,
+          "ui_heartbeat_gap_max_ms": 18.23087099910481,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 393129,
+              "render_ms": 13.174777006497607,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1097.0867670039297,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 32.27680900454288,
+          "input_to_preview_ms": 32.27680900454288,
+          "input_to_exact_ms": 1369.9274030004744,
+          "ui_install_max_ms": 8.275121996121015,
+          "ui_heartbeat_gap_max_ms": 18.80895800422877,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 393129,
+              "render_ms": 15.512867998040747,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1071.2632359936833,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 25.680407001345884,
+          "input_to_preview_ms": 25.680407001345884,
+          "input_to_exact_ms": 1389.8745300029987,
+          "ui_install_max_ms": 29.300520996912383,
+          "ui_heartbeat_gap_max_ms": 41.167210998537485,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 393129,
+              "render_ms": 14.98877599806292,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1084.1922489998979,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 22,
+        "accepted_frames_during_drag": 22,
+        "input_to_preview_median_ms": 22.64553999702912,
+        "input_to_preview_max_ms": 27.144095998664852,
+        "release_to_exact_ms": 1412.4137639955734,
+        "input_to_exact_ms": 1412.556538998615,
+        "ui_install_max_ms": 8.348121999006253,
+        "ui_heartbeat_gap_max_ms": 19.554722995962948,
+        "cancelled_render_count": 7,
+        "completed_render_count": 24
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "4103fe421d4c28efb82b8a8a580e8b2a1c14e280b4bf1ec8444527dd39b3b5de",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 6290064,
+      "peak_rss_mib": 2001.6015625,
+      "validation_peak_rss_mib": 2256.046875,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 1
+    },
+    {
+      "label": "candidate",
+      "fixture": "moderate-8192x8192-HALF-ZIP.exr",
+      "fixture_sha256": "096d2e3de82e65a87f9ff78c57308c1e5ca01cd3b1455a28c6928ca90af8b726",
+      "width": 8192,
+      "height": 8192,
+      "source_bytes": 1073741824,
+      "opening_ms": 2312.0625570008997,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 53.8396499978262,
+          "input_to_preview_ms": 53.8396499978262,
+          "input_to_exact_ms": 1437.2602259973064,
+          "ui_install_max_ms": 9.884491002594586,
+          "ui_heartbeat_gap_max_ms": 28.06798100209562,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 393129,
+              "render_ms": 19.027091999305412,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1150.1179120023153,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 26.594816001306754,
+          "input_to_preview_ms": 26.594816001306754,
+          "input_to_exact_ms": 1420.1167280043592,
+          "ui_install_max_ms": 10.804554003698286,
+          "ui_heartbeat_gap_max_ms": 19.742226002563257,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 393129,
+              "render_ms": 12.320228001044597,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1092.8020089995698,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 26.411068000015803,
+          "input_to_preview_ms": 26.411068000015803,
+          "input_to_exact_ms": 1409.3002829977195,
+          "ui_install_max_ms": 8.616756997071207,
+          "ui_heartbeat_gap_max_ms": 20.068313999217935,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 393129,
+              "render_ms": 12.594131003424991,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1118.2647020032164,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 24,
+        "accepted_frames_during_drag": 24,
+        "input_to_preview_median_ms": 22.316401998978108,
+        "input_to_preview_max_ms": 25.837508001131937,
+        "release_to_exact_ms": 1368.6191980013973,
+        "input_to_exact_ms": 1418.3908400009386,
+        "ui_install_max_ms": 8.311165998748038,
+        "ui_heartbeat_gap_max_ms": 20.477812002354767,
+        "cancelled_render_count": 6,
+        "completed_render_count": 25
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "4103fe421d4c28efb82b8a8a580e8b2a1c14e280b4bf1ec8444527dd39b3b5de",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 6290064,
+      "peak_rss_mib": 1977.47265625,
+      "validation_peak_rss_mib": 2229.5703125,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 2
+    },
+    {
+      "label": "candidate",
+      "fixture": "moderate-8192x8192-HALF-ZIP.exr",
+      "fixture_sha256": "096d2e3de82e65a87f9ff78c57308c1e5ca01cd3b1455a28c6928ca90af8b726",
+      "width": 8192,
+      "height": 8192,
+      "source_bytes": 1073741824,
+      "opening_ms": 1989.4144419959048,
+      "changes": [
+        {
+          "value": 10,
+          "input_to_first_ms": 42.06203300418565,
+          "input_to_preview_ms": 42.06203300418565,
+          "input_to_exact_ms": 1341.1085240004468,
+          "ui_install_max_ms": 12.909186996694189,
+          "ui_heartbeat_gap_max_ms": 25.067939997825306,
+          "stages": [
+            {
+              "exposure": 1.0,
+              "pixels": 393129,
+              "render_ms": 13.043428996752482,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 1.0,
+              "pixels": 67108864,
+              "render_ms": 1042.6048869994702,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": -10,
+          "input_to_first_ms": 32.998401002259925,
+          "input_to_preview_ms": 32.998401002259925,
+          "input_to_exact_ms": 1442.8681240024162,
+          "ui_install_max_ms": 9.026095001900103,
+          "ui_heartbeat_gap_max_ms": 20.857203999185003,
+          "stages": [
+            {
+              "exposure": -1.0,
+              "pixels": 393129,
+              "render_ms": 16.228055996180046,
+              "outcome": "completed"
+            },
+            {
+              "exposure": -1.0,
+              "pixels": 67108864,
+              "render_ms": 1143.8650240015704,
+              "outcome": "completed"
+            }
+          ]
+        },
+        {
+          "value": 20,
+          "input_to_first_ms": 27.54438300326001,
+          "input_to_preview_ms": 27.54438300326001,
+          "input_to_exact_ms": 1471.2663430036628,
+          "ui_install_max_ms": 8.504317003826145,
+          "ui_heartbeat_gap_max_ms": 30.61172899469966,
+          "stages": [
+            {
+              "exposure": 2.0,
+              "pixels": 393129,
+              "render_ms": 14.498575001198333,
+              "outcome": "completed"
+            },
+            {
+              "exposure": 2.0,
+              "pixels": 67108864,
+              "render_ms": 1183.1631880049827,
+              "outcome": "completed"
+            }
+          ]
+        }
+      ],
+      "drag": {
+        "events": 30,
+        "interval_ms": 33,
+        "previews_during_drag": 26,
+        "accepted_frames_during_drag": 26,
+        "input_to_preview_median_ms": 24.05856749828672,
+        "input_to_preview_max_ms": 36.797276996367145,
+        "release_to_exact_ms": 1442.744775005849,
+        "input_to_exact_ms": 1488.9199579993146,
+        "ui_install_max_ms": 11.902688005648088,
+        "ui_heartbeat_gap_max_ms": 16.503187995112967,
+        "cancelled_render_count": 3,
+        "completed_render_count": 27
+      },
+      "decode_calls": 1,
+      "exact_pixels_equal": true,
+      "exact_rgba_sha256": "4103fe421d4c28efb82b8a8a580e8b2a1c14e280b4bf1ec8444527dd39b3b5de",
+      "cache_bytes": 0,
+      "render_cache_bytes": 0,
+      "preview_source_bytes": 6290064,
+      "peak_rss_mib": 2030.20703125,
+      "validation_peak_rss_mib": 2255.69140625,
+      "python": "3.12.14",
+      "numpy": "2.5.4",
+      "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+      "conditions": "Qt offscreen; synthetic input; OS cache not evicted; one fresh process per sample; input-to-canvas install, not scanout",
+      "sample": 3
+    }
+  ],
+  "verification": {
+    "full_suite": "1626 passed, 2 Windows-only skipped, 12 Qt deprecation warnings",
+    "elapsed_s": 260.15,
+    "focused_exposure_fit_zoom_details_glass": "101 passed",
+    "diff_check": "clean",
+    "native_windows_visual_verification": "not run in this Linux cloud environment",
+    "final_source_hashes": {
+      "luma/workers.py": "de18dd076b6f721eedf3eb97580df40cd1a8acbb2139066899bd7385290ce1eb",
+      "luma/canvas.py": "d1da57879c839ee48ff957771077d4015a8d12a4294a1938707832e099d89a82",
+      "luma/app.py": "aea56ae8dfd64b4094b3346eadce16b6d95d2b423485d71583255623eff4b6ba",
+      "luma/glass_backdrop.py": "3252eb54bc18dda3e92925f1ec859bd3a6e354fbc30dfaa04f39eed73f9c913c",
+      "scripts/benchmark_exposure.py": "e6eaa9c9fb7ebac83806ac55f2d74450f8b9ab8f3781b9cdfa0fcc3e530e64cf",
+      "tests/test_exposure_preview.py": "1aab28c0d3c4f4929ef0ee28ac6fdd94ff1b5da401738c5a690b45774abcc0d8",
+      "tests/test_fit_animation.py": "12132437caca2d58164be6e9f966d6c653737bf3bf59021d35b7e9690de88dec"
+    }
+  }
+}

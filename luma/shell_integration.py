@@ -148,13 +148,27 @@ def _windows_path(value: object, filename: str) -> str:
     return str(path)
 
 
+def _managed_launcher(executable: str) -> str:
+    path = PureWindowsPath(_windows_path(executable, "Luma.exe"))
+    if (path.parent.parent.name != "versions"
+            or not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)-[0-9a-f]{24}", path.parent.name)):
+        raise InvalidManifest("Managed payload owner is outside the versioned layout.")
+    return str(path.parent.parent.parent / "Luma.exe")
+
+
 def registration_plan(
     executable: Path | str,
     existing_handlers: dict[str, str | None] | None = None,
+    *, launch_executable: Path | str | None = None,
 ) -> tuple[Write, ...]:
     """Pure bounded declaration, including when called on Linux."""
     exe = _windows_path(str(executable), "Luma.exe")
     dll = str(PureWindowsPath(exe).parent / "LumaThumbnail.dll")
+    if launch_executable is not None:
+        launch = _windows_path(str(launch_executable), "Luma.exe")
+        if launch.casefold() != _managed_launcher(exe).casefold():
+            raise ShellIntegrationError("Managed launch entry must be the exact installation root.")
+        exe = launch
     handlers = existing_handlers or {}
     writes: list[Write] = []
 
@@ -300,7 +314,9 @@ def _validate_keys(keys) -> None:
 
 
 def _validate_data(data) -> None:
-    if not isinstance(data, dict) or set(data) != {"entries", "keys", "thumbnails_enabled"}:
+    if not isinstance(data, dict) or set(data) not in (
+            {"entries", "keys", "thumbnails_enabled"},
+            {"entries", "keys", "thumbnails_enabled", "managed_payload"}):
         raise InvalidManifest("Unrecognized ownership data.")
     if type(data["thumbnails_enabled"]) is not bool:
         raise InvalidManifest("Invalid thumbnail ownership state.")
@@ -323,6 +339,11 @@ def _validate_data(data) -> None:
         if entry["previous"] is not None:
             raise InvalidManifest("This manifest version cannot own a replaced value.")
         _validate_value(address, entry["written"])
+    if "managed_payload" in data:
+        owner = _windows_path(data["managed_payload"], "Luma.exe")
+        _managed_launcher(owner)
+        if not _owned_by_executable(data, owner):
+            raise InvalidManifest("Managed owner does not match the recorded command, icon and DLL paths.")
 
 
 def _entry_map(data) -> dict:
@@ -352,13 +373,21 @@ def _managed_command_path(value) -> PureWindowsPath | None:
 
 def _same_installation_command_move(before, after) -> bool:
     old, new = _managed_command_path(before), _managed_command_path(after)
-    return bool(old and new and old != new and old.parent.parent == new.parent.parent)
+    if old and new and old != new and old.parent.parent == new.parent.parent:
+        return True
+    if old:
+        try:
+            _validate_value(_APPLICATION_COMMAND, after)
+            return after["data"].casefold() == f'"{_managed_launcher(str(old))}" "%1"'.casefold()
+        except ShellIntegrationError:
+            pass
+    return False
 
 
 def _validate_document(document) -> None:
     if (
         not isinstance(document, dict)
-        or type(document.get("version")) is not int or document.get("version") not in (1, 2)
+        or type(document.get("version")) is not int or document.get("version") not in (1, 2, 3)
     ):
         raise InvalidManifest("Unknown shell-integration manifest version.")
     if document.get("state") == "active":
@@ -369,7 +398,12 @@ def _validate_document(document) -> None:
     fields = {
         "version", "state", "base", "target", "changes", "created"
     }
-    adopting = document["version"] == 2
+    managed_pointer = document["version"] == 3
+    if managed_pointer:
+        fields.add("managed_pointer_transaction")
+        if document.get("managed_pointer_transaction") is not True:
+            raise InvalidManifest("Invalid managed pointer transaction marker.")
+    adopting = document["version"] == 2 or (managed_pointer and "adopted_application_command" in document)
     if adopting:
         fields.add("adopted_application_command")
         if document.get("adopted_application_command") is not True:
@@ -506,7 +540,7 @@ def _cleanup_empty_keys(registry, keys) -> None:
             pass  # Leaving an empty key is safe; recursive removal is forbidden.
 
 
-def _rollback(registry, journal, allowed_manifests) -> None:
+def _rollback(registry, journal, allowed_manifests, *, restore_manifest=None) -> None:
     raw = registry.read(METADATA_KEY, MANIFEST_NAME)
     if not any(raw == candidate for candidate in allowed_manifests):
         raise RecoveryRequired("The journal changed; automatic recovery was stopped.")
@@ -522,7 +556,13 @@ def _rollback(registry, journal, allowed_manifests) -> None:
             registry.write(key, name, before)
     registry.flush()
     _cleanup_empty_keys(registry, journal["created"])
-    _write_manifest(registry, _active(journal["base"]), raw)
+    if restore_manifest is None:
+        _write_manifest(registry, _active(journal["base"]), raw)
+    else:
+        if registry.read(METADATA_KEY, MANIFEST_NAME) != raw:
+            raise RecoveryRequired("The registry receipt changed before exact restoration.")
+        registry.write(METADATA_KEY, MANIFEST_NAME, restore_manifest)
+        registry.flush()
     if journal["base"] is None:
         _cleanup_empty_keys(registry, [METADATA_KEY])
     registry.notify_associations_changed()
@@ -532,6 +572,8 @@ def _recover(registry):
     document, raw = _read_manifest(registry)
     recovered = False
     if document is not None and document["state"] == "pending":
+        if document.get("managed_pointer_transaction") is True:
+            raise RecoveryRequired("The interrupted managed activation must recover its pointer and registry together through Setup.")
         try:
             _rollback(registry, document, (raw,))
         except Exception as exc:
@@ -544,8 +586,8 @@ def _recover(registry):
 
 
 def _transaction(registry, base, target, changes, created, previous_manifest,
-                 *, adopted_application_command=False) -> None:
-    if base == target and not changes:
+                 *, adopted_application_command=False, participant=None) -> None:
+    if base == target and not changes and participant is None:
         return
     journal = {
         "version": 1, "state": "pending", "base": base, "target": target,
@@ -554,8 +596,15 @@ def _transaction(registry, base, target, changes, created, previous_manifest,
     if adopted_application_command:
         journal["version"] = 2
         journal["adopted_application_command"] = True
+    if participant is not None:
+        journal["version"] = 3
+        journal["managed_pointer_transaction"] = True
     pending_value = _manifest_value(journal)
     target_value = _manifest_value(_active(target))
+    # A managed pointer participant persists its recovery record before the
+    # registry journal. It never accepts arbitrary registry addresses.
+    if participant is not None:
+        participant.prepare(registry, journal, previous_manifest)
     # Persist and flush the entire journal before ANY target registry write.
     try:
         _write_manifest(registry, journal, previous_manifest)
@@ -576,10 +625,15 @@ def _transaction(registry, base, target, changes, created, previous_manifest,
             else:
                 registry.write(key, name, after)
         registry.flush()
+        if participant is not None:
+            participant.activate(registry)
         _write_manifest(registry, _active(target), pending_value)
     except Exception as exc:
         try:
-            _rollback(registry, journal, (pending_value, target_value))
+            _rollback(registry, journal, (pending_value, target_value),
+                      restore_manifest=previous_manifest if participant is not None else None)
+            if participant is not None:
+                participant.rollback(registry)
         except Exception as recovery_error:
             raise RecoveryRequired(
                 "Registration failed and recovery is incomplete. The journal was "
@@ -589,6 +643,8 @@ def _transaction(registry, base, target, changes, created, previous_manifest,
             "Registration failed; completed writes were rolled back. "
             "Values changed by another program were preserved."
         ) from exc
+    if participant is not None:
+        participant.finish(registry)
     if target is None:
         _cleanup_empty_keys(registry, base["keys"] if base else [])
         _cleanup_empty_keys(registry, [METADATA_KEY])
@@ -659,7 +715,8 @@ def _public_errors(function):
 
 @_public_errors
 def install(executable: Path, registry=None, *, allowed_previous_executables=None,
-            expected_registration: OwnedRegistration | None = None) -> Result:
+            expected_registration: OwnedRegistration | None = None,
+            launch_executable: Path | None = None, _participant=None) -> Result:
     """Register owned entries; never select or replace Windows defaults.
 
     Automatic setup supplies an exact owner allowlist. Confirmed cross-copy repair
@@ -671,6 +728,13 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
     if (expected_registration is not None
             and exe.casefold() != _windows_path(str(executable), "Luma.exe").casefold()):
         raise RegistrationConflict("The confirmed installer executable path changed.")
+    launch = None
+    if launch_executable is not None:
+        launch = _windows_path(str(launch_executable), "Luma.exe")
+        if launch.casefold() != _managed_launcher(exe).casefold() or _participant is None:
+            raise ShellIntegrationError("Managed registration requires its pointer transaction.")
+    elif _participant is not None:
+        raise ShellIntegrationError("A pointer transaction requires the managed launch entry.")
     allowed = None
     if allowed_previous_executables is not None:
         allowed = {_windows_path(str(path), "Luma.exe").casefold()
@@ -698,7 +762,7 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
                     raise RegistrationConflict(
                         "Explorer registration belongs to another Luma copy. It was left untouched. "
                         "Continue using the registered copy; this copy will not replace its registration automatically.")
-                if document["version"] == 2:
+                if document.get("adopted_application_command") is True:
                     adoption = next(change for change in document["changes"]
                                     if _address(change) == _APPLICATION_COMMAND)
                     if str(_managed_command_path(adoption["before"])).casefold() not in allowed:
@@ -716,6 +780,13 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
                 raise RegistrationConflict(
                     "Explorer registration changed after confirmation. It was left untouched.")
             base, recovered = document["data"], False
+        if launch is None and base is not None and "managed_payload" in base:
+            try:
+                same_root = _managed_launcher(exe).casefold() == _managed_launcher(base["managed_payload"]).casefold()
+            except ShellIntegrationError:
+                same_root = False
+            if same_root:
+                raise RegistrationConflict("Managed registration must keep its stable launch entry; use the managed repair route.")
         handlers = {ext: registry.provider_for(ext) for ext in RASTER}
         old_entries = {_address(e): e for e in (base["entries"] if base else [])}
         for extension in RASTER:
@@ -728,7 +799,7 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
         entries, changes, conflicts = [], [], []
         preserved = 0
         adopted_application_command = False
-        for write in registration_plan(exe, handlers):
+        for write in registration_plan(exe, handlers, launch_executable=launch):
             address = (write.key, write.name)
             current = registry.read(*address)
             old = old_entries.get(address)
@@ -773,6 +844,8 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
                 f"or changed since installation. They were left untouched: {addresses}"
             )
         if not entries and base is None:
+            if _participant is not None:
+                raise RegistrationConflict("Managed activation requires an actual owned registration receipt.")
             return Result(0, preserved, recovered)
         created = sorted({
             key for change in changes for key in _ancestors(change["key"])
@@ -783,8 +856,11 @@ def install(executable: Path, registry=None, *, allowed_previous_executables=Non
             "keys": sorted(set(base["keys"] if base else []) | set(created)),
             "thumbnails_enabled": True,
         }
+        if launch is not None:
+            target["managed_payload"] = exe
         _transaction(registry, base, target, changes, created, raw,
-                     adopted_application_command=adopted_application_command)
+                     adopted_application_command=adopted_application_command,
+                     participant=_participant)
         return Result(len(changes), preserved, recovered)
 
 
@@ -800,6 +876,14 @@ def prepare_startup_registration(executable: Path, registry=None) -> Result:
     _runtime_guard()
     exe = _checked_executable(executable)
     registry = registry if registry is not None else WinRegistry()
+    path = Path(executable)
+    managed = ((path.parent / "luma-install.json").exists()
+               or path.parent.parent.name == "versions")
+    if managed:
+        from .managed_launch import read_active_payload
+        selected = read_active_payload(path.parent.parent.parent)
+        if selected.executable != path.resolve(strict=True):
+            raise RegistrationConflict("This payload is not the selected managed version; its registration was preserved.")
     with registry.locked():
         document, _ = _read_manifest(registry)
         if document is not None and document["state"] == "active":
@@ -815,12 +899,16 @@ def prepare_startup_registration(executable: Path, registry=None) -> Result:
             owned = {_address(e) for e in data["entries"]}
             if data["thumbnails_enabled"] and set(_TEMPLATE) <= owned:
                 return Result(0)
+    if managed:
+        from .managed_launch import activate_managed_installation
+        return activate_managed_installation(path, registry=registry,
+                                             expected_active_pointer=selected.pointer())
     return install(Path(exe), registry=registry, allowed_previous_executables=(exe,))
 
 
 def _uninstall_locked(registry) -> Result:
     document, _ = _read_manifest(registry)
-    if document is not None and document["version"] == 2:
+    if document is not None and document.get("adopted_application_command") is True:
         # Rolling back an uncompleted adoption restores an unowned old command.
         # Let setup repair it first; an uninstaller must not then delete that
         # command's payload while incorrectly reporting that cleanup completed.
@@ -855,7 +943,12 @@ def uninstall(registry=None) -> Result:
 
 
 def _owned_by_executable(data, executable: str) -> bool:
-    desired = {(w.key, w.name): w.value for w in registration_plan(executable)}
+    owner = data.get("managed_payload")
+    if owner is not None and owner.casefold() != str(executable).casefold():
+        return False
+    launch = _managed_launcher(owner) if owner is not None else None
+    desired = {(w.key, w.name): w.value for w in
+               registration_plan(executable, launch_executable=launch)}
     paths = [e for e in data["entries"] if _path_role(_address(e))]
     # Refuse ambiguous ownership, including a manifest with only non-path values.
     if not any(_path_role(_address(e)) in {"command", "icon"} for e in paths):
@@ -871,7 +964,7 @@ def _registration_owner_locked(registry) -> OwnedRegistration:
     if document is None or document["state"] != "active":
         raise RegistrationConflict("Repair requires an active Luma ownership manifest.")
     data = document["data"]
-    owner = next((entry["written"]["data"].split('"')[1]
+    owner = data.get("managed_payload") or next((entry["written"]["data"].split('"')[1]
                   for entry in data["entries"]
                   if _path_role(_address(entry)) in {"command", "icon"}), None)
     if owner is None:
@@ -981,6 +1074,8 @@ def disable_thumbnails(registry=None) -> Result:
             "entries": entries, "keys": list(base["keys"]),
             "thumbnails_enabled": False,
         }
+        if "managed_payload" in base:
+            target["managed_payload"] = base["managed_payload"]
         _transaction(registry, base, target, changes, [], raw)
         return Result(len(changes), preserved, recovered)
 
@@ -1026,7 +1121,7 @@ def status(registry=None) -> Status:
         detail = ""
         if changed:
             detail = f"{changed} registration value(s) were changed externally and preserved."
-        if not changed and native and _stale_paths(entries, sys.executable):
+        if not changed and native and not _owned_by_executable(document["data"], sys.executable):
             state = "stale"
             detail = "Registration points to another bundle location; use Repair."
         if native and enabled and state == "installed":

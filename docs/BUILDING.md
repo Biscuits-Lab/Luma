@@ -57,8 +57,11 @@ Managed updates select the exact `Luma-<version>-windows-x64-setup.exe` and veri
 
 ## Current development candidate
 
-`.github/workflows/thumbnail-validation.yml` validates the `main`
-branch as version 0.1.4. It never publishes a release. The exact commit must pass
+`.github/workflows/thumbnail-validation.yml` preserves the Windows validation
+procedure for version 0.1.4. GitHub builds are currently disabled for automatic
+pushes at the owner's request; do not dispatch a workflow without renewed
+permission. Local Linux checks do not replace native Windows acceptance.
+This validation definition never publishes a release. The exact commit must pass
 viewer/decoder regressions, 200% Qt scaling tests, native bridge tests, packaged
 viewer smoke (including a full 8192-square Unicode EXR), real required-surrogate
 extraction (including 4K/8K/16K HDR/EXR, EXR color/alpha probes and
@@ -97,7 +100,11 @@ evidence that the original installation was upgraded.
 The corrected updater uses the matching verified Setup executable and the
 validated original installation directory. Setup owns installation and shortcut
 changes; application payloads remain versioned so a DLL already loaded by
-Explorer is not overwritten. A successful installer exit alone is insufficient:
+Explorer is not overwritten. The installation root contains a fixed native `Luma.exe`; shortcuts, Open with
+commands and verified update restarts use that entry. A validated atomic pointer
+selects the versioned payload, while a transaction journal binds pointer changes
+to owned registry changes. Unknown or modified ownership fails closed.
+See [launcher protocol](../native/launcher/README.md). A successful installer exit alone is insufficient:
 the new application must confirm its actual embedded version, executable path,
 and process ID before the old application closes. Cancellation, failed Setup,
 or failed startup confirmation must not report a completed update.
@@ -120,8 +127,9 @@ settings, modified dependencies, or unrelated files.
 
 Setup is an alternative when a managed installation is desired. It must not
 silently take over an Explorer registration owned by a different portable copy.
-If an ownership conflict is reported, preserve both copies and resolve ownership
-through the existing copy's explicit Settings controls before retrying. Neither
+If an ownership conflict is reported, preserve both copies and rerun interactive Setup and review the explicit previous-owner/new-owner paths.
+Only intact, fully validated Luma-owned registration can be transferred after an
+explicit confirmation; canceling leaves that owner unchanged. Neither
 the updater nor a recovery script may unregister or overwrite that owner's DLL
 as a fallback. A portable copy without trustworthy ownership information is not
 eligible for in-place replacement.

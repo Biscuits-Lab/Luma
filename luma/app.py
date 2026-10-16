@@ -15,19 +15,22 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .toast import CanvasToast
 from .canvas import ImageCanvas
 from .details_overlay import DetailsOverlay, MetadataTextBrowser, PhotoMetadata
 from .histogram import PreviewHistogram
-from .i18n import tr, error_text, install_qt_translations, verify_packaged_qt_catalogs
+from .i18n import tr, error_text, install_qt_translations, verify_packaged_qt_catalogs, localize_buttons
 from .dialogs import PlainMessageBox as QMessageBox
 from .chrome import TitleBar, WindowChrome
-from .menu_widgets import RoundedMenu, ImageContextMenu
+from .menu_widgets import RoundedMenu, ImageContextMenu, DropdownMenu
+from .dropdown_widgets import DropdownComboBox, paint_chevron
+from .ui_fonts import install_ui_font
 from .decoders import SUPPORTED_EXTENSIONS
 from .workers import LatestWorker, ImageService, scan_folder, ThumbnailService
 
 ASSETS = Path(__file__).resolve().parent / 'assets'
 STYLE = """
-QWidget { background: #191919; color: #eeeeee; font-family: 'Segoe UI', 'Inter', sans-serif; font-size: 12px; }
+QWidget { background: #191919; color: #eeeeee; font-size: 12px; }
 QMainWindow { background: #191919; }
 QFrame#toolbar { background: #191919; border: 0; }
 QFrame#toolbar QPushButton { padding: 3px; }
@@ -66,7 +69,6 @@ QMenu { background: #2a2a2a; border: 1px solid #484848; padding: 5px; }
 QMenu::item { padding: 8px 22px; }
 QMenu::item:selected { background: #414141; }
 QMenu::separator { height: 1px; background: #484848; margin: 5px 8px; }
-QToolTip { color: #eeeeee; background: #353535; border: 1px solid #5a5a5a; padding: 5px; }
 """
 
 
@@ -211,6 +213,12 @@ class ZoomMenuButton(QPushButton):
         # paintEvent reserves 5px left and 20px for the chevron. Keep a little
         # extra clearance, using logical font metrics without a second DPR scale.
         width = max(82, max(metrics.horizontalAdvance(text) for text in labels) + 27)
+        if self.menu() is not None:
+            # Preserve a complete stable action label as well as percentage text.
+            # The visible popup always matches this same trigger width.
+            action_width = max((self.menu().fontMetrics().horizontalAdvance(action.text())
+                                for action in self.menu().actions() if not action.isSeparator()), default=0)
+            width = max(width, action_width + 20)
         return QSize(width, super().sizeHint().height())
 
     def minimumSizeHint(self):
@@ -228,16 +236,7 @@ class ZoomMenuButton(QPushButton):
         color = self.palette().color(group, QPalette.ColorRole.ButtonText)
         painter.setPen(color)
         painter.drawText(self.rect().adjusted(5, 0, -20, 0), Qt.AlignmentFlag.AlignCenter, self.text())
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(color, 1.4)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        x, y = self.width() - 13, self.height() / 2
-        arrow = QPainterPath(QPointF(x - 3, y - 1.5))
-        arrow.lineTo(x, y + 1.5)
-        arrow.lineTo(x + 3, y - 1.5)
-        painter.drawPath(arrow)
+        paint_chevron(painter, QRectF(self.rect()), color)
 
 
 def _footer_text_reserve(widget):
@@ -303,6 +302,9 @@ class FooterStatusLabel(QLabel):
 class ViewerWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        install_ui_font()
+        from .tooltip_theme import install_tooltip_theme
+        install_tooltip_theme()
         install_qt_translations()
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setWindowTitle('Luma')
@@ -331,12 +333,22 @@ class ViewerWindow(QMainWindow):
         self.scanner.failed.connect(self._scan_failed)
         self.thumbnails.completed.connect(self._thumbs_ready)
         self._build_ui()
+        self.toast = CanvasToast(self.stack)
+        self._error_dialog = None
+        self.canvas.fitAnimationChanged.connect(self._suspend_display_extras)
         self.chrome = WindowChrome(self)
         self._shortcuts()
         self.render_timer = QTimer(self)
         self.render_timer.setSingleShot(True)
-        self.render_timer.setInterval(70)
-        self.render_timer.timeout.connect(self._request_render)
+        self.render_timer.setInterval(180)
+        self.render_timer.timeout.connect(self._request_settled_render)
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.setInterval(0)
+        self.preview_timer.timeout.connect(self._request_preview)
+        self._display_is_preview = False
+        self._last_exact_image = None
+        self._last_exact_controls = None
         self.prefetch_timer = QTimer(self)
         self.prefetch_timer.setSingleShot(True)
         self.prefetch_timer.setInterval(40)
@@ -347,7 +359,7 @@ class ViewerWindow(QMainWindow):
         self.busy_timer.setInterval(150)
         self.busy_timer.timeout.connect(self._show_loading_indicator)
         self._set_controls(False)
-        self._status(tr('Drop an image to begin  ·  Ctrl+O to open'))
+        self._metadata_status('')
 
     def _build_ui(self):
         root = QWidget()
@@ -371,6 +383,12 @@ class ViewerWindow(QMainWindow):
         self.rotate_button.setIcon(symbol_icon('rotate'))
         self.rotate_button.setFixedWidth(34)
         left_row.addWidget(self.rotate_button)
+        from .editor import editor_icon, et
+        self.edit_button = button('', self.edit_image, et('Edit image'))
+        self.edit_button.setIcon(editor_icon())
+        self.edit_button.setIconSize(QSize(20, 20))
+        self.edit_button.setFixedWidth(34)
+        left_row.addWidget(self.edit_button)
         self.delete_button = button('', self.delete_image, tr('Move image to recycle bin · Delete'))
         self.delete_button.setIcon(symbol_icon('delete'))
         self.delete_button.setFixedWidth(34)
@@ -473,7 +491,7 @@ class ViewerWindow(QMainWindow):
         self.stack.addWidget(self.welcome)
         self.stack.addWidget(self.canvas)
         middle.addWidget(self.stack, 1)
-        self.sidebar = DetailsOverlay(self.canvas, self.stack)
+        self.sidebar = DetailsOverlay(self.canvas, self.centralWidget())
         side = self.sidebar.content_layout
         side.addWidget(QLabel(tr('IMAGE'), objectName='section'))
         self.dimension_label = QLabel(tr('No image selected'))
@@ -488,10 +506,12 @@ class ViewerWindow(QMainWindow):
         side.addSpacing(4)
         self.histogram = PreviewHistogram(lambda: self.canvas.item.pixmap())
         side.addWidget(self.histogram)
-        self.sidebar.visibilityChanged.connect(self.histogram.set_active)
+        self.sidebar.visibilityChanged.connect(lambda visible: self.histogram.set_active(
+            visible and not getattr(self, '_pending_render', False) and not self.canvas.fit_animation_running))
         side.addSpacing(8)
         side.addWidget(QLabel(tr('CHANNEL'), objectName='section'))
-        self.channel = QComboBox()
+        self.channel = DropdownComboBox()
+        self.channel.setAccessibleName(tr('CHANNEL'))
         self.channel.addItems(['RGBA', 'RGB', 'R', 'G', 'B', 'A'])
         self.channel.currentTextChanged.connect(lambda _: self._schedule_render())
         side.addWidget(self.channel)
@@ -507,8 +527,10 @@ class ViewerWindow(QMainWindow):
         self.exposure.setRange(-100, 100)
         self.exposure.setValue(0)
         self.exposure.valueChanged.connect(self._exposure_changed)
+        self.exposure.sliderReleased.connect(self._finish_exposure)
         side.addWidget(self.exposure)
-        self.tone = QComboBox()
+        self.tone = DropdownComboBox()
+        self.tone.setAccessibleName(tr('Tone mapping'))
         self.tone.addItem('Reinhard', 'Reinhard')
         self.tone.addItem(tr('Clip'), 'Clip')
         self.tone.currentTextChanged.connect(lambda _: self._schedule_render())
@@ -532,7 +554,7 @@ class ViewerWindow(QMainWindow):
         self.details = MetadataTextBrowser()
         side.addWidget(self.details)
         side.addStretch(1)
-        self.sidebar.attach_glass()
+        middle.addWidget(self.sidebar)
         self.sidebar.hide()
         layout.addLayout(middle, 1)
 
@@ -577,6 +599,7 @@ class ViewerWindow(QMainWindow):
         self.info_button.setIcon(symbol_icon('info'))
         self.info_button.setChecked(False)
         self.info_button.setFixedSize(30, 30)
+        self.sidebar.closeRequested.connect(self.info_button.click)
         metadata_row.addWidget(self.info_button)
         metadata_row.addStretch(1)
         controls.addWidget(self.metadata_group)
@@ -587,19 +610,21 @@ class ViewerWindow(QMainWindow):
         self.cancel_button.setSizePolicy(cancel_policy)
         controls.addWidget(self.cancel_button)
         self.cancel_button.hide()
-        self.fit_button = button('', lambda: self.canvas.fit(), tr('Fit to window · F'))
+        self.fit_button = button('', lambda: self.canvas.animate_fit(), tr('Fit to window · F'))
         self.fit_button.setIcon(symbol_icon('fit'))
         self.fit_button.setFixedWidth(34)
         controls.addWidget(self.fit_button)
         self.zoom_combo = ZoomMenuButton('—')
         self.zoom_combo.setToolTip(tr('Zoom relative to fit · 100% fits the window'))
+        self.zoom_combo.setAccessibleName(tr('Zoom relative to fit · 100% fits the window'))
         self.zoom_combo.setFixedHeight(28)
         self.zoom_combo.setStyleSheet('QPushButton { background: #303030; padding: 0; } QPushButton:hover { background: #3b3b3b; }')
-        zoom_menu = QMenu(self.zoom_combo)
+        zoom_menu = DropdownMenu(self.zoom_combo)
         for percent in (25, 50, 100, 200, 400, 800):
             zoom_menu.addAction(f'{percent}%', lambda checked=False, value=percent: self._zoom_preset(value))
         zoom_menu.addSeparator()
-        zoom_menu.addAction(tr('Actual pixels (1:1)    1'), self.canvas.actual_size)
+        actual_action = zoom_menu.addAction(tr('Actual size'), self.canvas.actual_size)
+        actual_action.setToolTip(tr('Actual pixels · 1'))
         self.zoom_combo.setMenu(zoom_menu)
         controls.addWidget(self.zoom_combo)
         self.actual_button = button('1:1', lambda: self.canvas.actual_size(), tr('Actual pixels · 1'))
@@ -653,6 +678,7 @@ class ViewerWindow(QMainWindow):
     def _context_image_ready(self):
         return (self.path is not None and self.displayed_path == self.path
                 and not getattr(self, '_pending_render', False)
+                and not getattr(self, '_display_is_preview', False)
                 and not self.canvas.item.pixmap().isNull())
 
     def _show_image_context_menu(self, global_position, keyboard=False):
@@ -699,9 +725,28 @@ class ViewerWindow(QMainWindow):
                 return True
         return super().eventFilter(watched, event)
 
-    def _status(self, text):
+    def _metadata_status(self, text):
+        """The footer is exclusively stable source-image information."""
         self.status_label.setText(text)
         self.status_label.setToolTip(text)
+
+    def _status(self, text):
+        self.toast.show_message(text)
+
+    def _persistent_error(self, text):
+        """Actionable failures remain until acknowledged, outside the footer."""
+        self.toast.dismiss()
+        if self._error_dialog is not None:
+            self._error_dialog.close()
+            self._error_dialog.deleteLater()
+        box = QMessageBox(QMessageBox.Icon.Warning, 'Luma', text,
+                          QMessageBox.StandardButton.Ok, self)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setWindowModality(Qt.WindowModality.NonModal)
+        localize_buttons(box)
+        self._error_dialog = box
+        box.show()
+
 
     def _zoom_changed(self, percent):
         text = f'{percent:.1f}%' if percent < 1 else f'{percent:.0f}%'
@@ -766,11 +811,14 @@ class ViewerWindow(QMainWindow):
             return
         path = Path(path).expanduser().absolute()
         if not path.exists():
-            self._status(tr('File not found: {path}', path=path))
+            self._persistent_error(tr('File not found: {path}', path=path))
             if self.path is None and self.displayed_path is None:
                 self.stack.setCurrentWidget(self.welcome)
                 self.dimension_label.setText(tr('No image selected'))
             return
+        if self._error_dialog is not None:
+            self._error_dialog.close()
+        self.toast.dismiss()
         self.cancel_load(silent=True)
         self.scanner.cancel()
         self.thumbnails.cancel()
@@ -799,6 +847,7 @@ class ViewerWindow(QMainWindow):
             self.dimension_label.setText(tr('No image selected'))
             self.type_label.clear()
             self.details.clear()
+            self._metadata_status('')
             self.filename.setText(tr('Opening folder…'))
             self._status(tr('Looking for images…'))
             self.cancel_button.show()
@@ -832,7 +881,7 @@ class ViewerWindow(QMainWindow):
         self.cancel_button.hide()
         if self.path is None:
             self.stack.setCurrentWidget(self.welcome)
-        self._status(error_text('Could not read folder.', message))
+        self._persistent_error(error_text('Could not read folder.', message))
 
     def select_index(self, index):
         if not self.files or index < 0 or index >= len(self.files):
@@ -855,6 +904,11 @@ class ViewerWindow(QMainWindow):
     def _open_image(self, path):
         self.prefetch_timer.stop()
         self.render_timer.stop()
+        self.preview_timer.stop()
+        self._display_is_preview = False
+        self._last_exact_image = None
+        self._last_exact_controls = None
+        self._suspend_display_extras(False)
         self.loader.cancel()
         self.path = path
         self.displayed_path = None
@@ -880,14 +934,37 @@ class ViewerWindow(QMainWindow):
         self._set_controls(False, preserve_zoom=True)
         self._request_render()
 
-    def _request_render(self):
+    def _request_render(self, preview=False):
         self.image_context_menu.close()
         self._image_context_source = None
-        if self.path is None:
+        if self.path is None or self._closing:
             return
+        if not preview:
+            self.preview_timer.stop()
         self._pending_render = True
-        self.busy_timer.start()
-        self._load_token = self.loader.submit((self.path, self.exposure.value() / 10, self.channel.currentText(), self.tone.currentData()))
+        if self._new_image:
+            self.busy_timer.start()
+        self._load_token = self.loader.submit((self.path, self.exposure.value() / 10,
+            self.channel.currentText(), self.tone.currentData(), preview))
+
+    def _request_preview(self):
+        self._request_render(preview=self.image_linear and not self._new_image)
+
+    def _request_settled_render(self):
+        if not self.exposure.isSliderDown():
+            self.preview_timer.stop()
+            self._request_render()
+
+    def _finish_exposure(self):
+        if self.path is not None and self._pending_render:
+            self.render_timer.start()
+
+    def _suspend_display_extras(self, suspended):
+        suspended = bool(suspended or getattr(self, '_pending_render', False)
+                         or self.canvas.fit_animation_running)
+        self.histogram.set_active(not suspended and self.sidebar.isVisible())
+        if self.sidebar.glass is not None:
+            self.sidebar.glass.set_suspended(suspended)
 
     def _show_loading_indicator(self):
         if self._pending_render and self.path is not None and not self._closing:
@@ -896,22 +973,48 @@ class ViewerWindow(QMainWindow):
 
     def _schedule_render(self):
         if hasattr(self, 'render_timer') and self.path is not None:
+            # Invalidate in-flight full renders immediately, before debounce.
+            # One preview timer and LatestWorker's single pending slot bound work.
+            self.loader.cancel()
+            self._load_token = -1
+            self._pending_render = True
+            self.prefetch_timer.stop()
+            self._suspend_display_extras(True)
+            self.save_action.setEnabled(False)
+            self.copy_action.setEnabled(False)
+            self.edit_button.setEnabled(False)
+            if not self.preview_timer.isActive():
+                self.preview_timer.start()
             self.render_timer.start()
 
     def _loaded(self, token, result):
         if token != self._load_token or self._closing or result is None or result['path'] != self.path:
             return
-        self._pending_render = False
+        preview = result.get('preview', False)
+        was_preview = self._display_is_preview
+        self._pending_render = preview
+        self._display_is_preview = preview
         self.busy_timer.stop()
         rgba = result['rgba']
-        h, w = rgba.shape[:2]
-        # Make the owning native-format image in one pass. Copying RGBA first
-        # made an extra full-size allocation before QPixmap converted the same
-        # pixels to its premultiplied format. This conversion also detaches from
-        # the worker/cache buffer, so the canvas never borrows ndarray storage.
-        image = QImage(rgba.data, w, h, rgba.strides[0], QImage.Format.Format_RGBA8888).convertToFormat(
-            QImage.Format.Format_ARGB32_Premultiplied)
-        self.canvas.set_image(image, reset=self._new_image)
+        w, h = result.get('width', rgba.shape[1]), result.get('height', rgba.shape[0])
+        # Worker-prepared owning native pixels: no full-image color conversion
+        # in this UI callback. The fallback supports legacy/synthetic callers.
+        image = result.get('image')
+        if image is None:
+            rh, rw = rgba.shape[:2]
+            image = QImage(rgba.data, rw, rh, rgba.strides[0], QImage.Format.Format_RGBA8888).copy()
+        self.canvas.set_image(image, reset=self._new_image, source_size=(w, h))
+        if preview:
+            # Keep metadata, dimensions, thumbnails, histogram and frosted glass
+            # out of the drag hot path. Save/Copy require the exact final frame.
+            self.displayed_path = self.path
+            if not was_preview:
+                self._status(tr('Preview · Full quality after adjustment'))
+            return
+        self._last_exact_image = image
+        self._last_exact_controls = (self.exposure.value(), self.channel.currentText(),
+                                     self.tone.currentData())
+        self._suspend_display_extras(False)
         self.histogram.set_preview(result.get('render_key', ('frame', self.canvas.item.pixmap().cacheKey())))
         self.sidebar.invalidate_backdrop()
         self._new_image = False
@@ -930,7 +1033,8 @@ class ViewerWindow(QMainWindow):
             size_text = f'{byte_size / 1024 / 1024:.1f} MB' if byte_size >= 1024 * 1024 else (f'{byte_size / 1024:.1f} KB' if byte_size >= 1024 else f'{byte_size} B')
         except OSError:
             size_text = '—'
-        self._status(f'{self.path.suffix[1:].upper()}   |   {w} × {h}   |   {size_text}')
+        self.toast.dismiss()
+        self._metadata_status(f'{self.path.suffix[1:].upper()}   |   {w} × {h}   |   {size_text}')
         if self.filmstrip.isVisible():
             for i in range(self.filmstrip.count()):
                 item = self.filmstrip.item(i)
@@ -950,7 +1054,18 @@ class ViewerWindow(QMainWindow):
     def _load_failed(self, token, message):
         if token != self._load_token or self._closing:
             return
+        if (self._pending_render and self._last_exact_image is not None
+                and self.displayed_path == self.path):
+            self.cancel_load(silent=True)
+            self._persistent_error(error_text('Display adjustment failed. Previous full-quality image restored.', message))
+            return
         self._pending_render = False
+        self._display_is_preview = False
+        self._last_exact_image = None
+        self._last_exact_controls = None
+        self.preview_timer.stop()
+        self.render_timer.stop()
+        self._suspend_display_extras(False)
         self.busy_timer.stop()
         self.cancel_button.hide()
         self.canvas.clear_image()
@@ -961,7 +1076,8 @@ class ViewerWindow(QMainWindow):
         self.details.setPlainText(error_text('Could not open {name}.', message,
                                               name=self.path.name if self.path else tr('image')))
         self._set_controls(False)
-        self._status(error_text('Could not open {name}.', message,
+        self._metadata_status('')
+        self._persistent_error(error_text('Could not open {name}.', message,
                                 name=self.path.name if self.path else tr('image')))
 
     def _set_controls(self, enabled, linear=False, preserve_zoom=False):
@@ -971,6 +1087,7 @@ class ViewerWindow(QMainWindow):
         for action in self.image_context_menu.image_actions:
             action.setEnabled(enabled)
         self.rotate_button.setEnabled(enabled)
+        self.edit_button.setEnabled(enabled)
         self.delete_button.setEnabled(enabled)
         self.save_action.setEnabled(enabled)
         self.copy_action.setEnabled(enabled)
@@ -1051,7 +1168,28 @@ class ViewerWindow(QMainWindow):
             self._thumb_token = -1
 
     def _toggle_info(self, checked):
+        self.canvas.cancel_fit_animation()
+        manual_view = None
+        if not self.canvas.item.pixmap().isNull() and not self.canvas.fitted:
+            # Use the geometric viewport center, not QRect's integer center.
+            # The latter is one pixel short for even sizes and would accumulate
+            # a half/one-pixel pan drift on every repeated open/close cycle.
+            inverse, _ = self.canvas.viewportTransform().inverted()
+            center = inverse.map(QPointF(self.canvas.viewport().width() / 2,
+                                        self.canvas.viewport().height() / 2))
+            manual_view = (self.canvas.transform(),
+                           center)
         self.sidebar.setVisible(checked)
+        # Resolve the nested middle layout now, so a manual view can preserve
+        # its physical scale and scene center across the reserved card width.
+        self.centralWidget().layout().activate()
+        if manual_view is not None:
+            transform, center = manual_view
+            self.canvas._fit_scale = self.canvas._fitted_scale()
+            self.canvas._relative_zoom = transform.m11() / self.canvas._fit_scale
+            self.canvas.setTransform(transform)
+            self.canvas.centerOn(center)
+            self.canvas._changed()
         if not checked:
             self.canvas.setFocus()
 
@@ -1065,13 +1203,36 @@ class ViewerWindow(QMainWindow):
             self.cancel_load()
 
     def cancel_load(self, silent=False):
+        was_pending = self._pending_render
         self._pending_render = False
+        self.canvas.cancel_fit_animation()
         self.busy_timer.stop()
         self.prefetch_timer.stop()
         self.loader.cancel()
         self.scanner.cancel()
         self.thumbnails.cancel()
         self.render_timer.stop()
+        self.preview_timer.stop()
+        self._suspend_display_extras(False)
+        if ((self._display_is_preview or was_pending) and self._last_exact_image is not None
+                and self.path is not None and self.displayed_path == self.path):
+            # Escape restores the last exact frame and its display settings.
+            # Never export a reduced preview or leave export permanently locked.
+            self.canvas.set_image(self._last_exact_image, reset=False)
+            exposure, channel, tone = self._last_exact_controls
+            blockers = [QSignalBlocker(widget) for widget in (self.exposure, self.channel, self.tone)]
+            self.exposure.setValue(exposure)
+            self.channel.setCurrentText(channel)
+            self.tone.setCurrentIndex(self.tone.findData(tone))
+            del blockers
+            self.exposure_label.setText(f'{exposure / 10:+.1f} EV')
+            self._display_is_preview = False
+            self.histogram.set_preview(('cancel-restored', self.canvas.item.pixmap().cacheKey()))
+            self.sidebar.invalidate_backdrop()
+        self.save_action.setEnabled(self.displayed_path == self.path and self.path is not None
+                                    and not self._display_is_preview)
+        self.copy_action.setEnabled(self.save_action.isEnabled())
+        self.edit_button.setEnabled(self.save_action.isEnabled())
         self._load_token = self._scan_token = self._thumb_token = -1
         self.cancel_button.hide()
         if not silent:
@@ -1106,15 +1267,32 @@ class ViewerWindow(QMainWindow):
             self.canvas.rotate_clockwise()
             self._status(tr('Display rotated 90°  ·  Original unchanged; use Save As to export'))
 
+    def edit_image(self):
+        if (self.displayed_path != self.path or self.path is None
+                or self._pending_render or self._display_is_preview):
+            return
+        from .editor import ImageEditorDialog
+        try:
+            editor = ImageEditorDialog(self.canvas.displayed_image(), self.path, self,
+                                       display_referred=self.image_linear)
+        except (ValueError, OSError, MemoryError) as error:
+            self._persistent_error(str(error))
+            return
+        editor.exported.connect(lambda path: self._status(
+            tr('Saved displayed image to {name}  ·  Original unchanged', name=Path(path).name)))
+        editor.exec()
+
     def copy_image(self):
-        if self.displayed_path != self.path or self.path is None:
+        if (self.displayed_path != self.path or self.path is None
+                or self._pending_render or self._display_is_preview):
             return
         from .actions import copy_displayed_image
         if copy_displayed_image(self.canvas.displayed_image()):
             self._status(tr('Displayed image copied to clipboard'))
 
     def save_as(self):
-        if self.displayed_path != self.path or self.path is None:
+        if (self.displayed_path != self.path or self.path is None
+                or self._pending_render or self._display_is_preview):
             return
         from .actions import save_displayed_image
         result = save_displayed_image(self, self.canvas.displayed_image(), self.path, self.image_linear)
@@ -1141,6 +1319,7 @@ class ViewerWindow(QMainWindow):
             self.index = -1
             self.filmstrip.clear()
             self.filename.setText('Luma')
+            self._metadata_status('')
             self.dimension_label.setText(tr('No image selected'))
             self.type_label.clear()
             self.details.clear()
@@ -1159,12 +1338,16 @@ class ViewerWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._closing = True
+        self.toast.dismiss()
+        if self._error_dialog is not None:
+            self._error_dialog.close()
         self.sidebar.hide()
         self.histogram.clear()
         self.chrome.close()
         self.busy_timer.stop()
         self.prefetch_timer.stop()
         self.render_timer.stop()
+        self.preview_timer.stop()
         for worker in (self.loader, self.scanner, self.thumbnails):
             worker.close()
         event.accept()

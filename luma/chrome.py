@@ -112,15 +112,17 @@ class WindowChrome(QObject):
             rounded=not (self.window.isMaximized() or self.window.isFullScreen()))
 
     def eventFilter(self, watched, event):
+        if self._closed:
+            return False
         if (watched is self.window and sys.platform == 'win32' and not self._closed
                 and event.type() in (QEvent.Type.Show, QEvent.Type.WinIdChange,
                                      QEvent.Type.WindowStateChange, QEvent.Type.ActivationChange)):
             # Qt may recreate its HWND during state changes. Wait until the
             # transition completes, then opt in again using the current handle.
             self._native_timer.start(0)
-        if (not isinstance(watched, QWidget) or watched.window() is not self.window
-                or self.window.isMaximized() or self.window.isFullScreen()
-                or event.type() not in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress)):
+        if (event.type() not in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress)
+                or not isinstance(watched, QWidget) or watched.window() is not self.window
+                or self.window.isMaximized() or self.window.isFullScreen()):
             return False
         point = self.window.mapFromGlobal(event.globalPosition().toPoint())
         edges = resize_edges(point, self.window.width(), self.window.height())

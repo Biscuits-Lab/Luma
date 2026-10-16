@@ -44,7 +44,7 @@ def test_metadata_and_info_follow_text_without_moving_zoom(qapp, language, width
         assert window.zoom_combo.width() == reserved_zoom_width
         for text in ('PNG | 1 × 1 | 1 B', 'PNG   |   4096 × 4096   |   12.1 MB',
                      '正在加载很长的文件名 Loading {image} <b> untouched ' * 30):
-            window._status(text)
+            window._metadata_status(text)
             qapp.processEvents()
             assert [widget.geometry() for widget in fixed] == initial
             assert window.status_label.toolTip() == text

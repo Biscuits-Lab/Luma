@@ -1,4 +1,4 @@
-"""Details covers the canvas without changing layout, fit or pan geometry."""
+"""Inset Details reserves width, refits fitted images and preserves manual views."""
 from pathlib import Path
 import time
 
@@ -46,7 +46,7 @@ def snapshot(window):
 
 
 @pytest.mark.parametrize('mode', ['fit', 'zoom', 'pixels', 'rotated'])
-def test_repeated_toggles_preserve_entire_view_state(window, qapp, mode):
+def test_repeated_toggles_refit_or_preserve_manual_view_without_drift(window, qapp, mode):
     canvas = window.canvas
     if mode == 'zoom':
         canvas.set_zoom_percent(250)
@@ -61,26 +61,45 @@ def test_repeated_toggles_preserve_entire_view_state(window, qapp, mode):
     for _ in range(5):
         window.info_button.click()
         qapp.processEvents()
-        assert snapshot(window) == before
         assert window.sidebar.isVisible()
-        assert window.sidebar.parentWidget() is window.stack
-        assert window.sidebar.geometry().right() == window.stack.width() - 1
+        assert window.sidebar.parentWidget() is window.centralWidget()
+        assert window.canvas.width() == before[0].width() - window.sidebar.width()
+        assert window.sidebar.x() == window.stack.geometry().right() + 1
         assert window.sidebar.height() == window.stack.height()
+        if mode == 'fit':
+            assert canvas.fitted and canvas.zoom_percent == 100
+            assert canvas.transform().m11() < before[2].m11()
+            assert canvas.transform().m11() == pytest.approx(canvas._fitted_scale())
+        else:
+            assert canvas.transform() == before[2]
+            center = canvas.mapToScene(canvas.viewport().rect().center())
+            assert abs(center.x() - before[3].x()) < 1
+            assert abs(center.y() - before[3].y()) < 1
+            assert canvas.zoom_percent == pytest.approx(canvas.transform().m11() / canvas._fit_scale * 100)
+            assert canvas.item.rotation() == before[7]
         window.info_button.click()
         qapp.processEvents()
-        assert snapshot(window) == before
+        restored = snapshot(window)
+        assert restored[0:3] == before[0:3]
+        assert restored[4:] == before[4:]
+        assert abs(restored[3].x() - before[3].x()) < 1
+        assert abs(restored[3].y() - before[3].y()) < 1
         assert not window.sidebar.isVisible()
 
 
-def test_panel_and_shadow_do_not_block_input_outside_panel(window, qapp):
+def test_card_is_inset_and_does_not_overlap_image_input(window, qapp):
     window.info_button.click()
     qapp.processEvents()
     sidebar = window.sidebar
-    # The shadow is a mouse-transparent sibling, never a screen-size blocker.
-    for x in (20, sidebar.x() - 6):
+    assert sidebar.glass is None
+    assert sidebar.card.geometry().left() == sidebar.CARD_MARGIN
+    assert sidebar.card.geometry().top() == sidebar.CARD_MARGIN
+    assert sidebar.card.geometry().right() == sidebar.width() - sidebar.CARD_MARGIN - 1
+    assert sidebar.card.geometry().bottom() == sidebar.height() - sidebar.CARD_MARGIN - 1
+    for x in (20, window.stack.width() - 6):
         point = window.stack.mapTo(window, QPoint(x, 100))
         assert window.childAt(point) is window.canvas.viewport()
-    point = window.stack.mapTo(window, QPoint(sidebar.x() + 15, 100))
+    point = sidebar.mapTo(window, QPoint(20, 100))
     hit = window.childAt(point)
     assert hit is sidebar or sidebar.isAncestorOf(hit)
 
@@ -106,7 +125,7 @@ def test_small_window_scrolls_within_header_footer(window, qapp):
     assert window.histogram.sample_runs == 1
 
 
-def test_resize_and_filmstrip_realign_overlay_without_extra_viewport_width(window, qapp):
+def test_resize_and_filmstrip_keep_card_beside_canvas(window, qapp):
     window.info_button.click()
     for size, strip in [((800, 560), True), ((1400, 900), False), ((1000, 650), True)]:
         window.resize(*size)
@@ -115,8 +134,23 @@ def test_resize_and_filmstrip_realign_overlay_without_extra_viewport_width(windo
         qapp.processEvents()
         assert window.canvas.width() == window.stack.width()
         assert window.sidebar.height() == window.stack.height()
-        assert window.sidebar.x() + window.sidebar.width() == window.stack.width()
-        assert window.sidebar.glass.x() + window.sidebar.SHADOW_WIDTH == window.sidebar.x()
+        assert window.sidebar.x() + window.sidebar.width() == window.centralWidget().width()
+        assert window.sidebar.x() == window.stack.geometry().right() + 1
+        assert window.sidebar.card.height() == window.stack.height() - 2 * window.sidebar.CARD_MARGIN
+        assert window.sidebar.glass is None
+
+
+def test_card_close_button_and_keyboard_shortcut_share_visibility_state(window, qapp):
+    window.info_button.click()
+    qapp.processEvents()
+    assert window.sidebar.close_button.accessibleName()
+    window.sidebar.close_button.click()
+    qapp.processEvents()
+    assert not window.sidebar.isVisible() and not window.info_button.isChecked()
+    assert window.canvas.hasFocus()
+    QTest.keyClick(window, Qt.Key.Key_I)
+    qapp.processEvents()
+    assert window.sidebar.isVisible() and window.info_button.isChecked()
 
 
 def test_hidden_navigation_does_not_sample_decode_or_retain_rgba(qapp, tmp_path, monkeypatch):

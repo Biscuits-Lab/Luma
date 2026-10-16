@@ -89,7 +89,8 @@ def repair_registration(executable: Path, confirm: Callable[[str, str], bool],
     checked_current, checked_siblings = _validated_installation(executable)
     if checked_current != current:
         raise installer.InstallerError("The installer payload changed after confirmation.")
-    return shell.install(
+    from .managed_launch import activate_managed_installation
+    return activate_managed_installation(
         Path(current), registry=registry,
         allowed_previous_executables=(previous.executable, *checked_siblings),
         expected_registration=previous,

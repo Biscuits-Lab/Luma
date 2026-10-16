@@ -100,7 +100,7 @@ def test_slow_initial_decode_stays_visible_without_welcome(qapp, tmp_path):
         assert window.isVisible()
         assert window.stack.currentWidget() is window.canvas
         assert counter.paints == 0
-        assert 'Loading slow.png' in window.status_label.toolTip()
+        assert 'Loading slow.png' in window.toast.text()
         release.set()
         wait_for(qapp, lambda: window.displayed_path == image)
         assert counter.paints == 0
@@ -162,14 +162,14 @@ def test_folder_welcome_only_returns_at_terminal_no_image_state(qapp, tmp_path, 
             window.cancel_load()
             window._scanned(token, (tmp_path, [tmp_path / 'obsolete.png'], None))
             assert window.path is None
-            assert 'cancelled' in window.status_label.toolTip()
+            assert 'cancelled' in window.toast.text()
         else:
             release.set()
             wait_for(qapp, lambda: not window.cancel_button.isVisible())
             if outcome == 'empty':
                 assert window.filename.text() == 'No images in this folder'
             else:
-                assert 'Could not read folder' in window.status_label.toolTip()
+                assert 'Could not read folder' in window._error_dialog.text()
         assert window.stack.currentWidget() is window.welcome
         assert window.isVisible()
     finally:
@@ -189,11 +189,11 @@ def test_initial_bad_target_is_visible_and_can_recover(qapp, tmp_path, missing):
         window.show()
         window.open_path(bad)
         if missing:
-            assert 'File not found' in window.status_label.toolTip()
+            assert 'File not found' in window._error_dialog.text()
             assert window.stack.currentWidget() is window.welcome
         else:
             wait_for(qapp, lambda: window.dimension_label.text() == 'Unable to open')
-            assert 'Could not open bad.png' in window.status_label.toolTip()
+            assert 'Could not open bad.png' in window._error_dialog.text()
             assert window.stack.currentWidget() is window.canvas
         assert window.isVisible()
         assert not window._pending_render

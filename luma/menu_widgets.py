@@ -15,10 +15,10 @@ from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QRectF, QPo
 from PySide6.QtGui import QAction, QColor, QIcon, QIconEngine, QKeySequence, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QHBoxLayout, QMenu, QStyle, QToolButton, QWidget, QWidgetAction
 
-from .i18n import get_language
-
-
-SHADOW_MARGIN = 10  # logical pixels included in native popup geometry
+from .ui_fonts import ui_font_families, ui_font_family_css
+from .dropdown_widgets import (
+    SHADOW_MARGIN, anchored_popup_geometry, paint_popup_surface, popup_panel_rect,
+)
 
 
 MENU_STYLE = """
@@ -36,11 +36,7 @@ QMenu#luma_popup QToolButton:disabled { color: #777777; }
 
 
 def menu_font_families():
-    if get_language() == 'en':
-        return ('Segoe UI', 'Inter', 'sans-serif')
-    region = 'TC' if get_language() == 'zh-TW' else 'SC'
-    return ('Microsoft YaHei', 'Microsoft YaHei UI', f'Noto Sans CJK {region}',
-            f'Noto Sans {region}', 'Segoe UI', 'sans-serif')
+    return ui_font_families()
 
 
 def _windows_animations_enabled():
@@ -190,7 +186,7 @@ class RoundedMenu(QMenu):
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAutoFillBackground(False)
-        families = ', '.join(f"'{name}'" for name in menu_font_families())
+        families = ui_font_family_css()
         self.setStyleSheet(MENU_STYLE + '\nQMenu#luma_popup, QMenu#luma_popup QToolButton { font-family: ' + families + '; }')
         self.setMinimumWidth(246 + 2 * SHADOW_MARGIN)
         self.fade_effect = QGraphicsOpacityEffect(self)
@@ -348,6 +344,87 @@ class RoundedMenu(QMenu):
         self.open_animation.stop()
         self.fade_effect.setOpacity(1.)
         super().hideEvent(event)
+
+
+class DropdownMenu(RoundedMenu):
+    """Compact action popup whose visible surface exactly matches its trigger.
+
+    QMenu still owns actions, keyboard navigation, shortcuts, native scrolling
+    and accessibility. Text is elided in the narrow footer, with the complete
+    unchanged action text available to assistive technology and hover tooltips.
+    """
+    def __init__(self, trigger):
+        super().__init__(trigger)
+        self.trigger = trigger
+        self.setObjectName('luma_dropdown')
+        self.setMinimumWidth(0)
+        self.setToolTipsVisible(True)
+        self._dropdown_stylesheet = '''
+            QMenu#luma_dropdown { background: transparent; border: 0; padding: 15px;
+                menu-scrollable: 1; color: #eeeeee; font-size: 12px; }
+            QMenu#luma_dropdown::item { background: transparent; padding: 7px 10px; }
+            QMenu#luma_dropdown::separator { height: 1px; margin: 5px 0; background: transparent; }
+        '''
+        self.setStyleSheet(self._dropdown_stylesheet)
+        self.aboutToShow.connect(self._match_trigger)
+
+    def _match_trigger(self):
+        self.setFixedWidth(self.trigger.width() + 2 * SHADOW_MARGIN)
+        # Constrain native actionGeometry as well as the window. Fixed widget
+        # width alone leaves QMenu's natural text-width hit/accessibility boxes
+        # wider than the surface. Account for the native item's 20px padding.
+        self.setStyleSheet(self._dropdown_stylesheet +
+                           f'QMenu#luma_dropdown::item {{ width: {max(1, self.trigger.width() - 30)}px; }}')
+        for action in self.actions():
+            if not action.isSeparator() and not action.toolTip():
+                action.setToolTip(action.text().replace('\t', '  '))
+
+    def panel_rect(self):
+        return popup_panel_rect(self)
+
+    def _panel_path(self):
+        path = QPainterPath()
+        path.addRoundedRect(self.panel_rect(), 7, 7)
+        return path
+
+    def _keep_in_work_area(self):
+        if not self.isVisible() or self._adjusting_bounds:
+            return
+        trigger = self.trigger.rect().translated(self.trigger.mapToGlobal(QPoint()))
+        screen = QApplication.screenAt(trigger.center()) or self.trigger.screen()
+        target = anchored_popup_geometry(trigger, self.height(), screen.availableGeometry(), prefer_above=True)
+        if self.geometry() != target:
+            self._adjusting_bounds = True
+            try:
+                self.setGeometry(target)
+            finally:
+                self._adjusting_bounds = False
+
+    def paintEvent(self, event):
+        # Native actionGeometry is also what QMenu uses for hit testing and
+        # accessibility. Only the pixels change; no replacement action widgets.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        paint_popup_surface(painter, self.panel_rect())
+        painter.setClipPath(self._panel_path())
+        for action in self.actions():
+            rect = self.actionGeometry(action)
+            if not action.isVisible() or not rect.intersects(event.rect()):
+                continue
+            if action.isSeparator():
+                painter.setPen(QPen(QColor('#454545'), 1))
+                painter.drawLine(rect.left() + 4, rect.center().y(), rect.right() - 4, rect.center().y())
+                continue
+            if action is self.activeAction() and action.isEnabled():
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor('#454545'))
+                painter.drawRoundedRect(QRectF(rect).adjusted(0, 1, 0, -1), 4, 4)
+            painter.setFont(self.font())
+            painter.setPen(QColor('#eeeeee' if action.isEnabled() else '#777777'))
+            text_rect = rect.adjusted(5, 0, -5, 0)
+            text = self.fontMetrics().elidedText(action.text(), Qt.TextElideMode.ElideRight, text_rect.width())
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, text)
+        painter.end()
 
 
 class ImageContextMenu(RoundedMenu):

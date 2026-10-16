@@ -6,18 +6,20 @@ All painted decoration uses logical coordinates, including fractional DPI.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QSizePolicy,
+    QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
 )
 
-from .i18n import get_language, tr
+from .i18n import tr
+from .dropdown_widgets import DropdownComboBox
+from .ui_fonts import ui_font_families, ui_font_family_css
 
 
 SETTINGS_STYLE = """
-QDialog#luma_settings { background: #191919; }
+QDialog#luma_settings { background: transparent; }
 QDialog#luma_settings QWidget { background: transparent; }
 QDialog#luma_settings QScrollArea { border: 0; }
 QDialog#luma_settings QFrame#settings_card { background: #242424; border: 1px solid #333333; border-radius: 10px; }
@@ -53,25 +55,104 @@ QDialog#luma_settings QProgressBar::chunk { background: #cccccc; border-radius: 
 
 
 def settings_font_families(language=None):
-    """Prefer the user's requested Windows face, then the correct CJK region.
-
-    Generic sans-serif fallback can choose Japanese glyph variants even when
-    the translated characters are Simplified Chinese. Never change UI language
-    to compensate for a font mismatch, and never bundle/download system fonts.
-    """
-    traditional = (language or get_language()) == 'zh-TW'
-    return ('Microsoft YaHei', 'Microsoft YaHei UI',
-            'Noto Sans CJK TC' if traditional else 'Noto Sans CJK SC',
-            'Noto Sans TC' if traditional else 'Noto Sans SC',
-            'Segoe UI', 'sans-serif')
+    """Compatibility wrapper for the shared, display-language font policy."""
+    return ui_font_families(language)
 
 
 def settings_stylesheet(language=None):
-    # A scoped QSS rule is necessary: QWidget's application-level font-family
-    # rule overrides setFont() on the dialog and its child widgets.
-    families = ', '.join(f"'{family}'" for family in settings_font_families(language))
+    # Keep standalone Settings and its owned popups on the shared font policy.
+    families = ui_font_family_css(language)
     return SETTINGS_STYLE + ("\nQDialog#luma_settings, QDialog#luma_settings QWidget "
                              "{ font-family: " + families + "; }\n")
+
+
+class SettingsDialog(QDialog):
+    """Frameless owned dialog: Qt retains Escape, Alt+F4 and dialog semantics."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAutoFillBackground(False)
+        self.window_chrome = None
+        self._bounds_timer = QTimer(self)
+        self._bounds_timer.setSingleShot(True)
+        self._bounds_timer.timeout.connect(self._fit_available_screen)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor('#3b3b3b'), 1))
+        painter.setBrush(QColor('#191919'))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 12, 12)
+        painter.end()
+
+    def _fit_available_screen(self):
+        parent = self.parentWidget()
+        screen = parent.screen() if parent is not None else self.screen()
+        if screen is None:
+            return
+        area = screen.availableGeometry().adjusted(8, 8, -8, -8)
+        if area.isEmpty():
+            return
+        # A 480px minimum cannot fit a 400-logical-pixel desktop at 200% DPI.
+        # Preserve it normally, but prefer a reachable scrolling dialog there.
+        self.setMinimumWidth(min(480, area.width()))
+        self.resize(min(self.width(), area.width()), min(self.height(), area.height()))
+        x = max(area.left(), min(self.x(), area.right() + 1 - self.width()))
+        y = max(area.top(), min(self.y(), area.bottom() + 1 - self.height()))
+        self.move(x, y)
+
+    def showEvent(self, event):
+        if self.window_chrome is None:
+            from .chrome import WindowChrome
+            self.window_chrome = WindowChrome(self)
+        super().showEvent(event)
+        self._fit_available_screen()
+        self._bounds_timer.start(0)
+
+    def _close_chrome(self):
+        self._bounds_timer.stop()
+        if self.window_chrome is not None:
+            self.window_chrome.close()
+            self.window_chrome = None
+
+    def done(self, result):
+        self._close_chrome()
+        super().done(result)
+
+    def closeEvent(self, event):
+        self._close_chrome()
+        super().closeEvent(event)
+
+
+class SettingsHeader(QFrame):
+    """Only noninteractive heading space starts an OS-managed window move."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName('settings_header')
+        self._drag_offset = None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.window().windowHandle()
+            if handle is not None and handle.startSystemMove():
+                event.accept()
+                return
+            self._drag_offset = event.globalPosition().toPoint() - self.window().pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.window().move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
 
 
 class _SettingsIconEngine(QIconEngine):
@@ -216,7 +297,7 @@ class _SettingsHeaderLayout(QLayout):
     Height-for-width lets the card reserve both rows without resize callbacks
     or a platform-dependent font/DPI breakpoint.
     """
-    def __init__(self, title, icon, accessory):
+    def __init__(self, title, icon, accessory, suffix=None):
         super().__init__()
         self._items = []
         self.setContentsMargins(0, 0, 0, 0)
@@ -228,7 +309,11 @@ class _SettingsHeaderLayout(QLayout):
         row.addWidget(OutlineIcon(icon))
         label = plain_label(title)
         label.setObjectName('settings_heading')
+        label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         row.addWidget(label)
+        if suffix is not None:
+            row.addWidget(suffix)
+        row.addStretch(1)
         self.addWidget(heading)
         if accessory is not None:
             self.addWidget(accessory)
@@ -288,14 +373,14 @@ class _SettingsHeaderLayout(QLayout):
 
 
 class SettingsCard(QFrame):
-    def __init__(self, title, icon, parent=None, accessory=None):
+    def __init__(self, title, icon, parent=None, accessory=None, suffix=None):
         super().__init__(parent)
         self.setObjectName('settings_card')
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.body = QVBoxLayout(self)
         self.body.setContentsMargins(18, 16, 18, 14)
         self.body.setSpacing(8)
-        self.body.addLayout(_SettingsHeaderLayout(title, icon, accessory))
+        self.body.addLayout(_SettingsHeaderLayout(title, icon, accessory, suffix))
 
     def minimumSizeHint(self):
         hint = super().minimumSizeHint()
@@ -376,11 +461,9 @@ class DetailsPanel(QWidget):
 class DisplaySettingsPanel(SettingsCard):
     """Two-way binding to this viewer's existing canvas background."""
     def __init__(self, viewer):
-        self.scope_badge = badge(tr('Current window'))
-        super().__init__(tr('Appearance'), 'display', accessory=self.scope_badge)
+        super().__init__(tr('Appearance'), 'display')
         self.viewer = viewer
-        self.scope_badge.setToolTip(tr('These display options apply immediately to this window.'))
-        self.background = QComboBox()
+        self.background = DropdownComboBox()
         self.background.setObjectName('settings_background')
         self.background.setAccessibleName(tr('Canvas background'))
         self.background.setMinimumWidth(150)

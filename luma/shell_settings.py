@@ -207,10 +207,16 @@ class ExplorerIntegrationPanel(QWidget):
             return
         self.repair.setEnabled(False)
         error = None
+        from .installer import InstallerError, register_managed_installation
+        from .update_installation import InstallationError, detect_installation
         try:
-            shell.install(Path(sys.executable))
+            installation = detect_installation()
+            if installation.mode == "managed":
+                register_managed_installation(installation.executable)
+            else:
+                shell.install(Path(sys.executable))
             _startup_registration_error = ""
-        except (shell.ShellIntegrationError, OSError) as exception:
+        except (shell.ShellIntegrationError, InstallerError, InstallationError, OSError) as exception:
             error = str(exception)
         finally:
             self.refresh()

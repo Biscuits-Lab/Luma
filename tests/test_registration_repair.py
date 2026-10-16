@@ -12,7 +12,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from luma import registration_repair as repair, shell_integration as shell
+from luma import managed_launch, registration_repair as repair, shell_integration as shell
 from test_shell_integration import EXE, OTHER_EXE, FakeRegistry, install
 
 
@@ -26,6 +26,11 @@ def managed(monkeypatch):
     monkeypatch.setattr(shell, "_checked_executable", lambda path: str(path))
     validate = Mock(return_value=(CURRENT, (CURRENT, SIBLING)))
     monkeypatch.setattr(repair, "_validated_installation", validate)
+    # These dialog/confirmation tests use synthetic Windows paths and exercise
+    # the registrar's exact receipt boundary. Real filesystem/pointer rollback
+    # and crash recovery are covered in test_managed_launch.py.
+    monkeypatch.setattr(managed_launch, "activate_managed_installation",
+                        lambda *args, **kwargs: shell.install(*args, **kwargs))
     return validate
 
 
@@ -375,3 +380,13 @@ def test_main_returns_failure_and_displays_plain_localized_summary(qapp, monkeyp
     assert shown[0][2].startswith(repair.TRANSLATIONS["zh-CN"][repair.ERROR_SUMMARY])
     assert shown[0][2].endswith("Changed <owner> {value}")
     assert qapp.font().families()[0] == "Microsoft YaHei"
+
+
+def test_confirmed_repair_routes_through_managed_activation(registry, managed, monkeypatch):
+    activation = Mock(return_value=shell.Result(1))
+    monkeypatch.setattr(managed_launch, "activate_managed_installation", activation)
+    previous = shell.registration_owner(registry)
+    repair.repair_registration(Path(CURRENT), lambda *_: True, registry)
+    activation.assert_called_once_with(Path(CURRENT), registry=registry,
+        allowed_previous_executables=(previous.executable, CURRENT, SIBLING),
+        expected_registration=previous)

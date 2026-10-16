@@ -190,7 +190,7 @@ def test_viewer_localized_controls_use_stable_data_and_raw_details(qapp, tmp_pat
         diagnostic = 'C:\\Black {image}.exr: unsupported <layout> 123'
         window._load_failed(42, diagnostic)
         assert window.details.toPlainText().endswith(diagnostic)
-        assert window.status_label.toolTip().endswith(diagnostic)
+        assert window._error_dialog.text().endswith(diagnostic)
         assert window.dimension_label.text() == i18n.tr('Unable to open')
     finally:
         window.close()

@@ -33,6 +33,15 @@ def payload(root, version="0.1.3", digest="a" * 64):
     return executable
 
 
+def stable_pointer(executable):
+    from luma import managed_launch
+    root = executable.parent.parent.parent
+    (root / "Luma.exe").write_bytes(b"MZ-immutable-launcher")
+    digest = hashlib.sha256((root / "Luma.exe").read_bytes()).hexdigest()
+    (root / managed_launch.OWNER_NAME).write_text("LUMA-LAUNCHER-1\n" + digest + "\n", encoding="ascii")
+    (root / managed_launch.POINTER_NAME).write_bytes(managed_launch._payload(root, executable.parent.name).pointer())
+
+
 def setup_file(root, version="0.1.4"):
     root.mkdir(parents=True, exist_ok=True)
     setup = root / f"Luma-{version}-windows-x64-setup.exe"
@@ -156,7 +165,8 @@ def test_setup_uses_original_custom_root_and_preserves_all_existing_files(tmp_pa
     commands = []
     def launch(command, **kwargs):
         commands.append((command, kwargs))
-        payload(managed.root, "0.1.4", "b" * 64)
+        new = payload(managed.root, "0.1.4", "b" * 64)
+        stable_pointer(new)
         return SetupProcess()
     result = apply(managed, tmp_path, launch)
     command, kwargs = commands[0]
@@ -537,3 +547,147 @@ def test_windows_process_query_fails_closed_without_handle_or_os_result(monkeypa
 
 def test_synthetic_protocol_process_cannot_claim_independent_os_evidence():
     assert probe.process_executable(SetupProcess(None)) is None
+
+
+def fake_child_process_api(executable, *, child_pid=12346, parent_pid=12345,
+                           child_time=200, parent_time=100, open_ok=True,
+                           wait_results=None, query_ok=True, snapshot_found=True):
+    waits = iter(wait_results or [258, 258])
+    closed, queried = [], []
+    def open_process(rights, inherit, pid):
+        queried.append((rights, inherit, pid))
+        return 99 if open_ok else None
+    def wait(handle, timeout):
+        return next(waits, 258)
+    def get_times(handle, creation, exited, kernel, user):
+        creation._obj.dwLowDateTime = child_time if handle == 99 else parent_time
+        creation._obj.dwHighDateTime = 0
+        return True
+    def query(handle, flags, buffer, length):
+        buffer.value = str(executable)
+        return query_ok
+    def snapshot(flags, pid):
+        return 77
+    def first(handle, entry):
+        entry._obj.th32ProcessID = child_pid
+        entry._obj.th32ParentProcessID = parent_pid
+        return snapshot_found
+    def next_process(handle, entry):
+        return False
+    def close(handle):
+        closed.append(handle)
+        return True
+    api = SimpleNamespace(OpenProcess=open_process, WaitForSingleObject=wait, GetProcessTimes=get_times,
+                          QueryFullProcessImageNameW=query, CreateToolhelp32Snapshot=snapshot,
+                          Process32FirstW=first, Process32NextW=next_process, CloseHandle=close)
+    return api, closed, queried
+
+
+def test_stable_launcher_child_requires_os_image_parent_and_creation_times(tmp_path, monkeypatch):
+    import ctypes
+    executable = portable_executable(tmp_path)
+    api, closed, queried = fake_child_process_api(executable)
+    monkeypatch.setattr(probe.sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: api, raising=False)
+    launcher = SetupProcess(None)
+    launcher._handle = 42
+    assert probe._verified_launcher_child(launcher, 12346, executable) == executable
+    assert queried == [(0x1000 | 0x100000, False, 12346)]
+    assert closed == [77, 99]
+
+
+@pytest.mark.parametrize("change,message", [({"parent_pid": 999}, "direct child"),
+    ({"child_time": 50}, "predates"), ({"open_ok": False}, "could not open"),
+    ({"query_ok": False}, "could not verify"), ({"snapshot_found": False}, "did not find"),
+    ({"wait_results": [0]}, "exited before"), ({"wait_results": [258, 0]}, "exited during")])
+def test_stable_launcher_child_failure_never_authorizes_parent_exit(tmp_path, monkeypatch, change, message):
+    import ctypes
+    executable = portable_executable(tmp_path)
+    api, closed, _ = fake_child_process_api(executable, **change)
+    monkeypatch.setattr(probe.sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: api, raising=False)
+    launcher = SetupProcess(None)
+    launcher._handle = 42
+    with pytest.raises(probe.LaunchError, match=message):
+        probe._verified_launcher_child(launcher, 12346, executable)
+    if change.get("open_ok", True):
+        assert closed[-1] == 99
+
+
+def test_exited_launcher_cannot_claim_an_acknowledged_child(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe.sys, "platform", "win32")
+    with pytest.raises(probe.LaunchError, match="not running"):
+        probe._verified_launcher_child(SetupProcess(0), 12346, portable_executable(tmp_path))
+
+
+def test_stable_entry_protocol_launches_root_but_verifies_payload_child(tmp_path, monkeypatch):
+    import sys
+    executable = payload(tmp_path / "managed", "0.1.4")
+    entry = executable.parent.parent.parent / "Luma.exe"
+    entry.write_bytes(b"MZ-stable-entry")
+    reads = []
+    def read_active(root):
+        reads.append(root)
+        return SimpleNamespace(executable=executable)
+    monkeypatch.setitem(sys.modules, "luma.managed_launch", SimpleNamespace(read_active_payload=read_active))
+    launch, calls, launcher = socket_popen(executable, change={"pid": 12346})
+    monkeypatch.setattr(probe, "process_executable", lambda process: entry)
+    children = []
+    def verified_child(process, pid, expected):
+        children.append((process, pid, expected))
+        return executable
+    monkeypatch.setattr(probe, "_verified_launcher_child", verified_child)
+    acknowledgment = probe.launch_verified_update(executable, "0.1.4", launcher=entry, popen=launch, timeout=2)
+    assert calls[0][0][0] == str(entry)
+    assert calls[0][1]["cwd"] == str(entry.parent)
+    assert acknowledgment.pid == 12346
+    assert acknowledgment.executable == acknowledgment.os_executable == executable
+    assert acknowledgment.launcher_pid == launcher.pid
+    assert acknowledgment.launcher_executable == entry
+    assert children == [(launcher, 12346, executable)]
+    assert reads == [entry.parent, entry.parent]
+
+
+def test_stable_entry_rechecks_committed_pointer_after_ack(tmp_path, monkeypatch):
+    import sys
+    executable = payload(tmp_path / "managed", "0.1.4")
+    other = payload(tmp_path / "managed", "0.1.5", "b" * 64)
+    entry = executable.parent.parent.parent / "Luma.exe"
+    entry.write_bytes(b"MZ-stable-entry")
+    selections = iter([executable, other])
+    monkeypatch.setitem(sys.modules, "luma.managed_launch", SimpleNamespace(
+        read_active_payload=lambda root: SimpleNamespace(executable=next(selections))))
+    launch, _, _ = socket_popen(executable, change={"pid": 12346})
+    monkeypatch.setattr(probe, "process_executable", lambda process: entry)
+    monkeypatch.setattr(probe, "_verified_launcher_child", lambda *args: executable)
+    with pytest.raises(probe.LaunchError, match="active managed payload changed"):
+        probe.launch_verified_update(executable, "0.1.4", launcher=entry, popen=launch, timeout=2)
+
+
+@pytest.mark.parametrize("state", ["missing", "old", "changed"])
+def test_successful_setup_requires_new_stable_selection(tmp_path, managed, state):
+    def launch(*args, **kwargs):
+        new = payload(managed.root, "0.1.4", "b" * 64)
+        if state != "missing":
+            stable_pointer(managed.executable if state == "old" else new)
+        if state == "changed":
+            new.write_bytes(b"MZ changed after activation")
+        return SetupProcess()
+    with pytest.raises(installation.InstallationError, match="stable launch entry"):
+        apply(managed, tmp_path, launch)
+    assert managed.executable.is_file()
+
+
+@pytest.mark.parametrize("hint", ["launcher-owner.txt", "active-payload.txt", "active-payload.pending.json",
+                                  "managed-uninstall.pending.json", "managed-uninstall.ready"])
+def test_root_launcher_or_partial_managed_state_is_never_portable(tmp_path, hint):
+    executable = portable_executable(tmp_path)
+    (tmp_path / hint).write_bytes(b"suspicious managed state")
+    with pytest.raises(installation.InstallationError):
+        installation.detect_installation(executable, frozen=True, platform="win32")
+
+
+def test_hardlinked_current_payload_is_not_an_update_owner(tmp_path, managed):
+    os.link(managed.executable, tmp_path / "foreign-link.exe")
+    with pytest.raises(installation.InstallationError):
+        installation.detect_installation(managed.executable, frozen=True, platform="win32")

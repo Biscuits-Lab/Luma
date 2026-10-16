@@ -41,6 +41,8 @@ class LaunchAcknowledgment:
     executable: Path
     pid: int
     os_executable: Path | None = None
+    launcher_pid: int | None = None
+    launcher_executable: Path | None = None
 
 
 def process_executable(process) -> Path | None:
@@ -62,6 +64,114 @@ def process_executable(process) -> Path | None:
         return _canonical_executable(Path(buffer.value))
     except OSError as error:
         raise LaunchError("Windows reported an invalid new process executable. Your current Luma stays open.") from error
+
+
+def _process_creation_time(api, handle) -> int:
+    import ctypes
+    from ctypes import wintypes
+    creation, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+    if not api.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exited),
+                               ctypes.byref(kernel), ctypes.byref(user)):
+        raise LaunchError("Windows could not verify the new process creation time. Your current Luma stays open.")
+    return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+
+
+def _process_parent_pid(api, pid: int) -> int:
+    import ctypes
+    from ctypes import wintypes
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+    api.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    api.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    api.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+    api.Process32FirstW.restype = wintypes.BOOL
+    api.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+    api.Process32NextW.restype = wintypes.BOOL
+    snapshot = api.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS.
+    if snapshot in (None, ctypes.c_void_p(-1).value):
+        raise LaunchError("Windows could not inspect the launcher-child relationship. Your current Luma stays open.")
+    try:
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        present = api.Process32FirstW(snapshot, ctypes.byref(entry))
+        for _ in range(65536):
+            if not present:
+                break
+            if entry.th32ProcessID == pid:
+                return int(entry.th32ParentProcessID)
+            present = api.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        api.CloseHandle(snapshot)
+    raise LaunchError("Windows did not find the acknowledged child process. Your current Luma stays open.")
+
+
+def _verified_launcher_child(launcher_process, child_pid: int, expected_executable: Path) -> Path:
+    """Accept only a live direct child of the exact still-live created launcher.
+
+    The launcher's retained Popen handle remains alive throughout verification,
+    preventing an exited-parent PID from being mistaken for a later process.
+    The child is opened by PID once and every subsequent identity/liveness query
+    uses that retained handle. Neither a self-reported path nor a PID alone is
+    accepted as evidence of a successful stable-entry restart.
+    """
+    if sys.platform != "win32" or launcher_process.poll() is not None:
+        raise LaunchError("The stable launcher is not running during child verification. Your current Luma stays open.")
+    import ctypes
+    from ctypes import wintypes
+    from types import SimpleNamespace
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    api.OpenProcess.restype = wintypes.HANDLE
+    api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    api.WaitForSingleObject.restype = wintypes.DWORD
+    api.GetProcessTimes.argtypes = [wintypes.HANDLE, *[ctypes.POINTER(wintypes.FILETIME)] * 4]
+    api.GetProcessTimes.restype = wintypes.BOOL
+    api.CloseHandle.argtypes = [wintypes.HANDLE]
+    api.CloseHandle.restype = wintypes.BOOL
+    handle = api.OpenProcess(0x1000 | 0x100000, False, child_pid)  # QUERY_LIMITED_INFORMATION | SYNCHRONIZE.
+    if not handle:
+        raise LaunchError("Windows could not open the acknowledged payload process. Your current Luma stays open.")
+    try:
+        if api.WaitForSingleObject(handle, 0) != 258:  # WAIT_TIMEOUT means still running.
+            raise LaunchError("The new payload exited before it could be verified. Your current Luma stays open.")
+        actual = process_executable(SimpleNamespace(_handle=handle))
+        if actual is None or os.path.normcase(str(actual)) != os.path.normcase(str(expected_executable)):
+            raise LaunchError("The Windows child process image does not match the selected payload. Your current Luma stays open.")
+        if _process_parent_pid(api, child_pid) != launcher_process.pid:
+            raise LaunchError("The acknowledged payload is not the created launcher's direct child. Your current Luma stays open.")
+        launcher_handle = getattr(launcher_process, "_handle", None)
+        if launcher_handle is None:
+            raise LaunchError("The stable launcher process handle is unavailable. Your current Luma stays open.")
+        if _process_creation_time(api, handle) < _process_creation_time(api, launcher_handle):
+            raise LaunchError("The acknowledged payload predates this launcher. Your current Luma stays open.")
+        if launcher_process.poll() is not None or api.WaitForSingleObject(handle, 0) != 258:
+            raise LaunchError("The stable launcher or its payload exited during verification. Your current Luma stays open.")
+        return actual
+    finally:
+        api.CloseHandle(handle)
+
+
+def _validate_launcher_target(launcher: Path, executable: Path) -> Path:
+    """The pointer owner supplies the strict reader; no fallback target exists."""
+    launcher = _canonical_executable(launcher)
+    if (executable.parent.parent.name != "versions"
+            or launcher.parent != executable.parent.parent.parent):
+        raise LaunchError("The stable entry and payload do not belong to the same managed root.")
+    # Registration-helper integration owns this reader. Keep its exact pointer
+    # contract centralized rather than maintaining two diverging parsers here.
+    from .managed_launch import read_active_payload
+    from .installer import InstallerError
+    try:
+        selected = read_active_payload(launcher.parent)
+    except (InstallerError, OSError) as error:
+        raise LaunchError("The stable entry ownership or active pointer could not be verified. Your current Luma stays open.") from error
+    if selected.executable != executable:
+        raise LaunchError("The active managed payload changed before relaunch. Your current Luma stays open.")
+    return launcher
 
 
 def validate_startup_endpoint(port: int, nonce: str) -> tuple[int, str]:
@@ -103,13 +213,17 @@ def _validated_ack(data: bytes, nonce: str, expected_version: str,
                 or type(payload["protocol"]) is not int or payload["protocol"] != PROTOCOL
                 or payload["nonce"] != nonce or payload["version"] != expected_version
                 or payload["frozen"] is not True or type(payload["pid"]) is not int
-                or payload["pid"] <= 0 or payload["pid"] != expected_pid
+                or payload["pid"] <= 0 or (expected_pid is not None and payload["pid"] != expected_pid)
                 or not isinstance(payload["executable"], str)):
             raise ValueError("startup identity mismatch")
-        actual = _canonical_executable(Path(payload["executable"]))
+        reported = Path(payload["executable"])
+        if (not reported.is_absolute()
+                or os.path.normcase(os.path.normpath(str(reported))) != os.path.normcase(str(executable))):
+            raise ValueError("startup executable mismatch")
+        actual = _canonical_executable(reported)
         if os.path.normcase(str(actual)) != os.path.normcase(str(executable)):
             raise ValueError("startup executable mismatch")
-    except (ValueError, TypeError, UnicodeError, OSError) as error:
+    except (ValueError, TypeError, UnicodeError, RecursionError, OSError) as error:
         raise LaunchError("The new process did not confirm the expected embedded version, executable path and process ID. Your current Luma stays open.") from error
     return LaunchAcknowledgment(expected_version, actual, payload["pid"])
 
@@ -121,7 +235,8 @@ def _check_cancel(cancelled):
 
 def launch_verified_update(executable: Path, expected_version: str, *,
                            cancelled: Callable[[], bool] = lambda: False,
-                           timeout: float = STARTUP_TIMEOUT, popen=None) -> LaunchAcknowledgment:
+                           timeout: float = STARTUP_TIMEOUT, popen=None,
+                           launcher: Path | None = None) -> LaunchAcknowledgment:
     """Call from a worker thread; return only after the actual GUI acknowledges.
 
     The listener binds only 127.0.0.1 and closes on every success/error/cancel path.
@@ -136,6 +251,7 @@ def launch_verified_update(executable: Path, expected_version: str, *,
     except OSError as error:
         raise LaunchError("The new application could not be inspected. Your current Luma stays open.") from error
     _check_cancel(cancelled)
+    entry = _validate_launcher_target(Path(launcher), executable) if launcher is not None else executable
     nonce = secrets.token_hex(32)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         # Exclusive binding avoids a second local process sharing the endpoint on
@@ -146,15 +262,19 @@ def launch_verified_update(executable: Path, expected_version: str, *,
         listener.listen(1)
         port = listener.getsockname()[1]
         validate_startup_endpoint(port, nonce)
-        command = [str(executable), "--update-startup-port", str(port),
+        command = [str(entry), "--update-startup-port", str(port),
                    "--update-startup-nonce", nonce]
         environment = os.environ.copy()
         environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         try:
-            process = (popen or subprocess.Popen)(command, cwd=str(executable.parent), env=environment,
+            process = (popen or subprocess.Popen)(command, cwd=str(entry.parent), env=environment,
                                                   shell=False, close_fds=True)
         except OSError as error:
             raise LaunchError("The new application could not be launched. Your current Luma stays open.") from error
+        if launcher is not None:
+            root_image = process_executable(process)
+            if root_image is None or os.path.normcase(str(root_image)) != os.path.normcase(str(entry)):
+                raise LaunchError("Windows did not confirm the expected stable entry process. Your current Luma stays open.")
         deadline = time.monotonic() + timeout
         while True:
             _check_cancel(cancelled)
@@ -189,15 +309,22 @@ def launch_verified_update(executable: Path, expected_version: str, *,
                     received.extend(block)
                     if len(received) > MAX_ACK_BYTES:
                         raise LaunchError("The new application's startup message exceeded the safety limit.")
-                acknowledgment = _validated_ack(bytes(received), nonce, expected_version, executable, process.pid)
-                os_executable = process_executable(process)
-                if os_executable is not None and os.path.normcase(str(os_executable)) != os.path.normcase(str(executable)):
-                    raise LaunchError("The Windows process image does not match the new application. Your current Luma stays open.")
+                acknowledgment = _validated_ack(bytes(received), nonce, expected_version, executable,
+                                                 None if launcher is not None else process.pid)
+                if launcher is not None:
+                    os_executable = _verified_launcher_child(process, acknowledgment.pid, executable)
+                    _validate_launcher_target(entry, executable)  # Fail if the committed pointer drifted.
+                else:
+                    os_executable = process_executable(process)
+                    if os_executable is not None and os.path.normcase(str(os_executable)) != os.path.normcase(str(executable)):
+                        raise LaunchError("The Windows process image does not match the new application. Your current Luma stays open.")
                 _check_cancel(cancelled)
                 if process.poll() is not None:
                     raise LaunchError("The new application exited during startup confirmation. Your current Luma stays open.")
                 return LaunchAcknowledgment(acknowledgment.version, acknowledgment.executable,
-                                            acknowledgment.pid, os_executable)
+                                            acknowledgment.pid, os_executable,
+                                            process.pid if launcher is not None else None,
+                                            entry if launcher is not None else None)
 
 
 def _send_startup_ack(port: int, nonce: str) -> bool:

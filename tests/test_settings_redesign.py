@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QAccessible, QFont, QFontDatabase, QIcon, QPainter, QPixmap, QTextLayout
+from PySide6.QtGui import QAccessible, QFont, QFontDatabase, QFontInfo, QIcon, QPainter, QPixmap, QTextLayout
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QCheckBox, QLabel, QPushButton, QStyle, QStyleOptionButton
 
@@ -17,6 +17,12 @@ from luma import shell_settings, updater, settings_widgets
 from luma.app import ViewerWindow
 from luma.i18n import set_language, tr
 from luma.i18n_dialogs import TRANSLATIONS
+
+
+@pytest.fixture(autouse=True)
+def offline_release_notes(monkeypatch):
+    from luma import release_notes
+    monkeypatch.setattr(release_notes, 'fetch_notes', lambda *args, **kwargs: '')
 
 
 def open_settings(qapp, monkeypatch, state='unavailable', detail=''):
@@ -61,7 +67,7 @@ def test_settings_open_preserves_viewer_and_has_no_side_effects(qapp, monkeypatc
         assert dialog.findChildren(QCheckBox) == []
         assert not hasattr(display, 'strip_switch')
         assert not hasattr(display, 'info_switch')
-        assert display.scope_badge.text() == tr('Current window')
+        assert not hasattr(display, 'scope_badge')
         check.assert_not_called()
         install.assert_not_called()
         thumbs.assert_not_called()
@@ -354,18 +360,18 @@ def test_initial_settings_size_fits_usable_screen_with_native_frame_allowance(qa
         close(qapp, window, dialog)
 
 
-@pytest.mark.parametrize('language, regional_family', (
-    ('en', 'Noto Sans CJK SC'),
-    ('zh-CN', 'Noto Sans CJK SC'),
-    ('zh-TW', 'Noto Sans CJK TC'),
+@pytest.mark.parametrize('language, first_family, regional_family', (
+    ('en', 'Segoe UI', 'Inter'),
+    ('zh-CN', 'Microsoft YaHei', 'Noto Sans CJK SC'),
+    ('zh-TW', 'Microsoft JhengHei', 'Noto Sans CJK TC'),
 ))
-def test_settings_font_prefers_yahei_with_region_specific_fallback(language, regional_family):
+def test_settings_font_follows_shared_display_language_policy(language, first_family, regional_family):
     families = settings_widgets.settings_font_families(language)
-    assert families[:2] == ('Microsoft YaHei', 'Microsoft YaHei UI')
-    assert families[2] == regional_family
+    assert families[0] == first_family
+    assert regional_family in families
     stylesheet = settings_widgets.settings_stylesheet(language)
     assert 'QDialog#luma_settings, QDialog#luma_settings QWidget' in stylesheet
-    assert stylesheet.index("'Microsoft YaHei'") < stylesheet.index(repr(regional_family))
+    assert stylesheet.index(repr(first_family)) < stylesheet.index(repr(regional_family))
 
 
 @pytest.mark.parametrize('language, title, headings', (
@@ -378,13 +384,15 @@ def test_settings_actual_glyph_faces_are_region_correct_and_do_not_change_langua
     installed = {family.casefold() for family in QFontDatabase.families()}
     candidates = settings_widgets.settings_font_families(language)
     expected = next((family for family in candidates[:4] if family.casefold() in installed), None)
+    if language == 'en':
+        expected = QFontInfo(qapp.font()).family()
     if expected is None:
         pytest.skip('No YaHei or Noto CJK family installed for deterministic glyph inspection')
     window, dialog = open_settings(qapp, monkeypatch)
     try:
         assert dialog.findChild(QLabel, 'settings_title').text() == title
         assert tuple(label.text() for label in dialog.findChildren(QLabel, 'settings_heading')) == headings
-        assert window.font().families() == ['Segoe UI', 'Inter', 'sans-serif']
+        assert window.font().families() == list(candidates)
         inspected = []
         for label in dialog.findChildren(QLabel):
             if not label.text():
@@ -655,3 +663,25 @@ def test_settings_close_stroke_is_thicker_without_changing_other_icons(qapp, kin
     settings_widgets._SettingsIconEngine(kind).paint(
         painter, QRect(0, 0, 24, 24), QIcon.Mode.Normal, QIcon.State.Off)
     assert painter.setPen.call_args.args[0].widthF() == width
+
+
+@pytest.mark.parametrize('language', ['en', 'zh-CN', 'zh-TW'])
+def test_version_badge_is_next_to_heading_and_appearance_has_no_scope_label(qapp, language):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QLabel
+    set_language(language)
+    window = ViewerWindow()
+    window.show()
+    dialog = updater.UpdateDialog(window, '0.1.4')
+    dialog.show()
+    try:
+        qapp.processEvents()
+        heading = dialog.update_card.findChild(QLabel, 'settings_heading')
+        position = heading.mapTo(dialog, QPoint(heading.width(), heading.height() // 2))
+        badge_position = dialog.version_badge.mapTo(dialog, QPoint(0, dialog.version_badge.height() // 2))
+        assert 0 < badge_position.x() - position.x() <= 12
+        assert abs(badge_position.y() - position.y()) <= 1
+        assert not hasattr(dialog.display_panel, 'scope_badge')
+        assert dialog.check_button.isVisible()
+    finally:
+        close(qapp, window, dialog)

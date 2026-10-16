@@ -118,6 +118,8 @@ def set_language(language: str | None = None) -> str:
     """
     global _LANGUAGE
     _LANGUAGE = detect_system_language() if language is None else normalize_language(language)
+    from .ui_fonts import install_ui_font
+    install_ui_font(language=_LANGUAGE)
     install_qt_translations()
     return _LANGUAGE
 

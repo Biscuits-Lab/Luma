@@ -469,6 +469,7 @@ def test_launch_does_not_quit_until_real_identity_acknowledged(qapp, tmp_path, m
     launches, quits = [], []
     started, allow_ack = threading.Event(), threading.Event()
     def launch(executable, version, **kwargs):
+        assert kwargs["launcher"] == installed.root / "Luma.exe"
         launches.append((executable, version))
         started.set()
         assert allow_ack.wait(2)

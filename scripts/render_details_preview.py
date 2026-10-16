@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture the real Qt Details overlay using a clearly synthetic image fixture."""
+"""Capture the real docked Details card with a clearly synthetic image fixture."""
 from __future__ import annotations
 
 import argparse
@@ -51,22 +51,26 @@ def render(output, language='zh-CN', width=1280):
     window.grab().save(str(closed))
     window.info_button.click()
     deadline = time.monotonic() + 2
-    while (window.histogram.plot.data is None or not window.sidebar.glass.capture_count) and time.monotonic() < deadline:
+    while window.histogram.plot.data is None and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(.005)
     app.processEvents()
     opened = output / f'details-open-{suffix}.png'
     window.grab().save(str(opened))
     after = window.canvas.viewport().size(), window.canvas.transform(), window.canvas.zoom_percent
-    assert before == after, 'Details changed the view geometry or zoom'
+    assert after[0].width() == before[0].width() - window.sidebar.width()
+    assert before[2] == after[2] == 100, 'Fitted image lost its fit-relative 100% state'
     result = {'language': language, 'width': window.width(),
               'zoom': window.canvas.zoom_percent,
-              'canvas_unchanged': before == after,
+              'canvas_width_closed': before[0].width(),
+              'canvas_width_open': after[0].width(),
+              'reserved_card_width': window.sidebar.width(),
+              'card_insets': window.sidebar.CARD_MARGIN,
+              'fit_relative_100_preserved': before[2] == after[2] == 100,
               'histogram_samples': window.histogram.plot.data.sampled_pixels,
               'histogram_visible_pixels': window.histogram.plot.data.visible_pixels,
               'histogram_runs': window.histogram.sample_runs,
-              'backdrop_captures': window.sidebar.glass.capture_count,
-              'backdrop_capture_ms': window.sidebar.glass.last_capture_ms,
+              'backdrop_captures': 0,
               'screenshots': {'closed': str(closed), 'open': str(opened)}}
     window.close()
     app.processEvents()

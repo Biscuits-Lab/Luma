@@ -93,6 +93,11 @@ class UpdateSmokeContractTests(unittest.TestCase):
         self.assertIn("acknowledgment.os_executable == updated.executable", source)
         self.assertIn('assert observed == ""', source)
         self.assertIn("restored == bundled_dll_directory", source)
+        self.assertIn("launcher=stable_entry", source)
+        self.assertIn("OwnedLauncherChild(acknowledgment, candidate_launcher)", source)
+        self.assertIn("acknowledgment.launcher_pid == candidate_launcher.pid", source)
+        self.assertIn("acknowledgment.pid != candidate_launcher.pid", source)
+        self.assertIn("read_active_payload(install_root)", source)
 
 
 if __name__ == "__main__":

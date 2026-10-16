@@ -35,6 +35,8 @@ def compile_command(compiler: Path, root: Path, work: Path, version: str, scaled
                f"/DPayloadId={version}-{'0' * 24}", f"/DBundleDir={work / 'payload'}",
                f"/DMetadataFile={work / 'luma-install.json'}", f"/DArtifactDir={work / 'output'}",
                f"/DIntegrityFile={work / 'payload-hashes.iss'}",
+               f"/DLauncherFile={work / 'launcher.exe'}",
+               f"/DLauncherOwnerFile={work / 'launcher-owner.txt'}",
                f"/DAppIcon={root / 'luma/assets/icon.ico'}"]
     if scaled:
         command.append("/DLumaUiFontScaleTest=1")
@@ -53,6 +55,8 @@ def preflight(root: Path, compiler: Path) -> dict:
             (work / "payload").mkdir()
             # Deliberately not a PE or an executable application. Never launched.
             (work / "payload/Luma.exe").write_text("compile-only placeholder; not executable\n", encoding="utf-8")
+            (work / "launcher.exe").write_text("compile-only launcher placeholder; not executable\n", encoding="utf-8")
+            (work / "launcher-owner.txt").write_text("LUMA-LAUNCHER-1\n" + "0" * 64 + "\n", encoding="ascii")
             (work / "output").mkdir()
             (work / "luma-install.json").write_text("{}\n", encoding="utf-8")
             (work / "payload-hashes.iss").write_text(

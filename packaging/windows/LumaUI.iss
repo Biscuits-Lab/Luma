@@ -201,6 +201,16 @@ begin
      LumaBrandIcon.Width, LumaBrandIcon.Height]));
 end;
 
+procedure BrowseLumaDirectory(Sender: TObject);
+begin
+  { Native Delphi events cannot be copied into a Pascal Script event slot:
+    its setter resolves script procedure numbers only. Invoke the existing
+    engine callback from an explicit script wrapper instead. }
+  Log('LUMA_BROWSE invoking native directory chooser');
+  WizardForm.DirBrowseButton.OnClick(WizardForm.DirBrowseButton);
+  Log('LUMA_BROWSE native directory chooser closed');
+end;
+
 procedure DrawFolderGlyph;
 begin
   { A small monochrome vector drawn at the native dialog scale. No font glyph
@@ -295,7 +305,7 @@ begin
   LumaBrowseButton.TabStop := True;
   LumaBrowseButton.TabOrder := WizardForm.DirBrowseButton.TabOrder;
   LumaBrowseButton.BackColor := clNone;
-  LumaBrowseButton.OnClick := WizardForm.DirBrowseButton.OnClick;
+  LumaBrowseButton.OnClick := @BrowseLumaDirectory;
   DrawFolderGlyph;
   WizardForm.DirBrowseButton.Visible := False;
   WizardForm.DirBrowseButton.TabStop := False;

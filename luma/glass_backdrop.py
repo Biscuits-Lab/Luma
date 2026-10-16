@@ -115,6 +115,7 @@ class GlassBackdrop(QWidget):
         self._last_signature = None
         self._effects_allowed = transparency_allowed()
         self._rendering = False
+        self._suspended = False
         self.capture_count = 0
         self.last_capture_ms = 0.
         self.last_capture_size = QSize()
@@ -160,7 +161,7 @@ class GlassBackdrop(QWidget):
                 getattr(self.canvas, 'background', None), self.canvas.palette().cacheKey())
 
     def invalidate(self, *unused):
-        if self._rendering or not self.isVisible() or not self._effects_allowed:
+        if self._suspended or self._rendering or not self.isVisible() or not self._effects_allowed:
             return
         signature = self._signature()
         if signature == self._last_signature:
@@ -173,8 +174,19 @@ class GlassBackdrop(QWidget):
         if not self._refresh_timer.isActive():
             self._refresh_timer.start()
 
+    def set_suspended(self, suspended):
+        """Keep expensive decorative captures out of interactive image changes."""
+        self._suspended = bool(suspended)
+        self._refresh_timer.stop()
+        if suspended:
+            self._image = QImage()
+            self._last_signature = None
+            self.update()
+        else:
+            self.invalidate()
+
     def _refresh(self):
-        if not self.isVisible() or not self._effects_allowed or self._rendering:
+        if self._suspended or not self.isVisible() or not self._effects_allowed or self._rendering:
             return
         source = self._source_rect()
         if source.isEmpty():

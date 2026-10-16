@@ -38,6 +38,13 @@ try {
     if (!(Test-Path -LiteralPath $IsccPath -PathType Leaf)) {
         throw "Install Inno Setup 6.7+ from https://jrsoftware.org/isdl.php, then pass -IsccPath if needed. GitHub Windows runners normally include it."
     }
+    & ./scripts/build_launcher.ps1
+    if ($LASTEXITCODE -ne 0) { throw "Native stable launcher build/tests failed." }
+    $LauncherFile = Join-Path $Root "build/launcher/Release/Luma.exe"
+    if (!(Test-Path -LiteralPath $LauncherFile -PathType Leaf)) { throw "Native stable launcher was not produced." }
+    if ((Get-Item -LiteralPath $LauncherFile).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Native stable launcher must not be a linked file."
+    }
     # Luma.iss checks ISPP Ver against EncodeVer(6, 7, 0). ISCC.exe can report
     # FileVersion 0.0.0.0 even when the actual compiler engine is current.
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -61,6 +68,9 @@ try {
     $PayloadId = "$Version-$($BundleHash.Substring(0,24))"
     $BuildDir = Join-Path $Root "build/installer/$PayloadId"
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+    $LauncherOwnerFile = Join-Path $BuildDir "launcher-owner.txt"
+    $LauncherHash = (Get-FileHash -LiteralPath $LauncherFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText($LauncherOwnerFile, "LUMA-LAUNCHER-1`n$LauncherHash`n", [Text.Encoding]::ASCII)
     $MetadataFile = Join-Path $BuildDir "luma-install.json"
     $Metadata = [ordered]@{ managed_install = $true; layout = "versions-v1"; version = $Version; payload_id = $PayloadId; bundle_sha256 = $BundleHash }
     [IO.File]::WriteAllText($MetadataFile, ($Metadata | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
@@ -81,6 +91,7 @@ try {
         "/DAppVersion=$Version", "/DPayloadId=$PayloadId", "/DBundleDir=$Bundle",
         "/DMetadataFile=$MetadataFile", "/DArtifactDir=$Artifacts",
         "/DIntegrityFile=$IntegrityFile",
+        "/DLauncherFile=$LauncherFile", "/DLauncherOwnerFile=$LauncherOwnerFile",
         "/DAppIcon=$(Join-Path $Root 'luma/assets/icon.ico')", "packaging/windows/Luma.iss"
     )
     if ($UiFontScaleTest) { $Arguments = @("/DLumaUiFontScaleTest=1") + $Arguments }

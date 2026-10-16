@@ -8,6 +8,7 @@ import tempfile
 import types
 import unittest
 from unittest.mock import patch
+from luma import managed_launch
 
 MODULE = Path(__file__).resolve().parents[1] / "luma" / "installer.py"
 spec = importlib.util.spec_from_file_location("luma.installer_contract", MODULE)
@@ -150,10 +151,12 @@ class InstallerLanguageTests(unittest.TestCase):
                           "LumaBrowseButton.Caption := CustomMessage('ChangeLocation')",
                           "LumaBrowseButton.Hint := CustomMessage('ChangeLocation')",
                           "LumaBrowseButton.TabStop := True",
-                          "LumaBrowseButton.OnClick := WizardForm.DirBrowseButton.OnClick",
+                          "LumaBrowseButton.OnClick := @BrowseLumaDirectory",
+                          "WizardForm.DirBrowseButton.OnClick(WizardForm.DirBrowseButton)",
                           "ContentWidth := WizardForm.SelectDirPage.ClientWidth",
                           "LumaBrandIcon.BackColor := clNone"):
             self.assertIn(statement, ui)
+        self.assertNotIn("LumaBrowseButton.OnClick := WizardForm.DirBrowseButton.OnClick", ui)
         self.assertIn("ScaleX(38), ScaleY(38)", ui)
         self.assertIn("LumaBrowseButton.Bitmap.Canvas", ui)
         self.assertNotIn("LumaBrandIcon.Bitmap.Canvas", ui)
@@ -410,40 +413,37 @@ class InstallerBoundaryTests(unittest.TestCase):
             installer.uninstall_managed_installation(second)
         self.assertEqual(set(called), {first, second})
 
-    def test_automatic_registration_allows_only_validated_sibling_owners(self):
+    def test_automatic_registration_uses_atomic_managed_activation_boundary(self):
         first = self.payload(self.root / "installed")
         second = self.payload(self.root / "installed", "b" * 64)
         foreign = self.payload(self.root / "portable")
-        called = []
-        def register(exe, *, allowed_previous_executables):
-            called.append((exe, allowed_previous_executables))
-        fake = types.SimpleNamespace(install=register)
-        with patch.object(installer, "__package__", "luma"), patch.dict("sys.modules", {"luma.shell_integration": fake}):
+        # The full activation/registry transaction has its own behavioral suite.
+        # This entry point must not bypass it with a direct shell.install call.
+        with patch.object(managed_launch, "activate_managed_installation") as activate:
             installer.register_managed_installation(second)
-        self.assertEqual(len(called), 1)
-        self.assertEqual(called[0][0], second.resolve(strict=True))
-        self.assertEqual(set(called[0][1]), {first.resolve(strict=True), second.resolve(strict=True)})
-        self.assertNotIn(foreign.resolve(strict=True), called[0][1])
+        activate.assert_called_once_with(second)
+        self.assertEqual(set(installer.installed_executables(second)), {first, second})
+        self.assertNotIn(foreign, installer.installed_executables(second))
 
     def test_invalid_marker_blocks_automatic_registration(self):
         exe = self.payload(self.root)
         (exe.parent / installer.MARKER_NAME).unlink()
-        called = []
-        fake = types.SimpleNamespace(install=lambda *args, **kwargs: called.append(args))
-        with patch.object(installer, "__package__", "luma"), patch.dict("sys.modules", {"luma.shell_integration": fake}):
+        # Bind the deliberately isolated module alias used by this contract so
+        # the actual activation validates before creating a native registry.
+        with patch.object(managed_launch, "installer", installer), \
+             patch.object(managed_launch.shell, "WinRegistry") as registry:
             with self.assertRaises(installer.InstallerError):
                 installer.register_managed_installation(exe)
-        self.assertEqual(called, [])
+        registry.assert_not_called()
 
     def test_registration_conflict_preserves_all_payloads(self):
         first = self.payload(self.root)
         second = self.payload(self.root, "b" * 64)
-        def conflict(*args, **kwargs):
-            raise RuntimeError("Unrelated registration was preserved")
-        fake = types.SimpleNamespace(install=conflict)
-        with patch.object(installer, "__package__", "luma"), patch.dict("sys.modules", {"luma.shell_integration": fake}):
+        with patch.object(managed_launch, "activate_managed_installation",
+                          side_effect=RuntimeError("Unrelated registration was preserved")) as activate:
             with self.assertRaises(RuntimeError):
                 installer.register_managed_installation(second)
+        activate.assert_called_once_with(second)
         self.assertTrue(first.is_file())
         self.assertTrue(second.is_file())
 

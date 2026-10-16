@@ -155,7 +155,7 @@ def test_footer_geometry_and_controls_stay_stable(qapp):
         for dimensions, text in [((32, 24), 'PNG | 32 × 24 | 99 B'),
                                  ((1920, 1080), 'Loading ' + 'very long filename ' * 30),
                                  ((70, 1600), 'EXR | 70 × 1600 | 152.1 MB')] * 3:
-            window._status(text)
+            window._metadata_status(text)
             window.cancel_button.show()
             window.canvas.clear_image()
             qapp.processEvents()
@@ -194,7 +194,7 @@ def test_toolbar_slider_and_explicit_pixel_action(qapp):
         assert window.canvas.zoom_percent == 125  # Slider quantization cannot feed back.
         assert window.zoom_combo.text() == '125%'
         pixel_action = next(action for action in window.zoom_combo.menu().actions()
-                            if action.text().startswith('Actual pixels (1:1)'))
+                            if action.text() == 'Actual size')
         pixel_action.trigger()
         assert window.canvas.transform().m11() * window.canvas.viewport().devicePixelRatioF() == pytest.approx(1)
         window._zoom_preset(100)

@@ -93,13 +93,13 @@ class InstallerBusyGuardTests(unittest.TestCase):
         self.assertNotRegex(self.probe, r"ErrorCode\s*(?:=|<>)\s*5\b")
 
     def test_wait_budget_is_initialized_once_for_the_whole_scan(self):
-        self.assertEqual(self.wrapper.count("RemainingRetries := 20;"), 1)
+        self.assertEqual(self.wrapper.count("RemainingRetries := 200;"), 1)
         self.assertIn("FirstBusyBinaryWithBudget(Directory, RemainingRetries)", self.wrapper)
         self.assertNotIn("Sleep(", self.wrapper)
         self.assertNotIn("RemainingRetries :=", self.scan)
         self.assertEqual(self.probe.count("RemainingRetries :="), 1)
         self.assertIn("LumaBusyRetryDelayMilliseconds = 50;", SOURCE)
-        self.assertLessEqual(20 * 50, 1000)
+        self.assertLessEqual(200 * 50, 10000)
 
     def test_nested_directories_and_files_share_the_same_budget(self):
         self.assertIn("var RemainingRetries: Integer", self.scan)

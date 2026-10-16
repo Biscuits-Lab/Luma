@@ -24,10 +24,12 @@ in this repository or the generated benchmark corpus.
 - Keep effective `.exr` and `.hdr` thumbnail association diagnostics separate;
   ordinary startup reports a setup failure without adding a Settings section
 
-The full viewer still retains every source pixel at float32 precision. There is
-no preview-to-full-image swap and no reduced-resolution Copy/Save As fallback.
-Channel/alpha/exposure/tone-map behavior is unchanged. HALF converts exactly to
-float32; UINT has the same float32 integer-rounding limits as before.
+The full viewer retains every source pixel at float32 precision. Initial opening
+still displays exact full resolution. Interactive exposure/channel/tone changes now
+use a bounded temporary preview before exact refinement; Copy/Save never export
+that reduced preview. See [interactive exposure measurements](EXPOSURE_PERFORMANCE.md).
+Final channel/alpha/exposure/tone-map behavior is unchanged. HALF converts exactly
+to float32; UINT has the same float32 integer-rounding limits as before.
 
 ## Measured full-window opening
 

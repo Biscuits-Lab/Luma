@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QAbstractAnimation
 from PySide6.QtGui import QAccessible, QContextMenuEvent, QCursor, QImage
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QTest, QSignalSpy
 from PySide6.QtWidgets import QApplication
 
 from luma import menu_widgets
@@ -87,19 +87,27 @@ def test_menu_vector_icons_high_dpi_and_disabled(qapp, factor):
 
 
 def test_popup_alpha_fade_and_fast_reopen(qapp, monkeypatch):
+    qapp.processEvents()  # Drain preceding windows before starting this popup.
     monkeypatch.setattr(menu_widgets, 'menu_animations_enabled', lambda widget: True)
     menu = RoundedMenu()
     menu.add_icon_action('Copy\tCtrl+C', 'copy', lambda: None)
+    states = QSignalSpy(menu.open_animation.stateChanged)
     menu.popup(QPoint(40, 40))
-    qapp.processEvents()
-    assert menu.open_animation.state() == QAbstractAnimation.State.Running
-    QTest.qWait(45)
+    assert any(states.at(i)[0] == QAbstractAnimation.State.Running for i in range(states.count()))
+    # Inspect exact animation time, independent of a loaded runner's scheduling.
+    menu.open_animation.pause()
+    menu.open_animation.setCurrentTime(45)
+    # Rendering via grab is synchronous. Do not dispatch unrelated pending
+    # close/activation events while inspecting this exact paused timestamp.
+    assert menu.open_animation.state() == QAbstractAnimation.State.Paused
+    assert menu.open_animation.currentTime() == 45
     middle = menu.fade_effect.opacity()
     assert 0 < middle < 1
     image = menu.grab().toImage()
     assert image.pixelColor(0, 0).alpha() == 0
     assert 0 < image.pixelColor(image.width() // 2, image.height() - round((SHADOW_MARGIN + 3) * image.devicePixelRatio())).alpha() < 255
-    QTest.qWait(160)
+    menu.open_animation.setCurrentTime(menu.open_animation.duration())
+    qapp.processEvents()
     image = menu.grab().toImage()
     for x, y in ((0, 0), (image.width() - 1, 0), (0, image.height() - 1), (image.width() - 1, image.height() - 1)):
         assert image.pixelColor(x, y).alpha() == 0

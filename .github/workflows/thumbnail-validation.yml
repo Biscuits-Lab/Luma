@@ -29,6 +29,16 @@ jobs:
       - name: Preflight native installer compilation without setup output
         shell: pwsh
         run: python scripts/preflight_installer.py
+      - name: Preflight actual stable launcher and process safety
+        shell: pwsh
+        run: |
+          $LauncherPython = (Get-Command python).Source
+          cmake -S native/launcher -B build/launcher -A x64 -DBUILD_TESTING=ON "-DPython3_EXECUTABLE=$LauncherPython"
+          if ($LASTEXITCODE -ne 0) { throw "Native launcher configuration failed" }
+          cmake --build build/launcher --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Native launcher compilation failed" }
+          ctest --test-dir build/launcher -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "Native launcher process-safety preflight failed" }
       - name: Build native bridge, test viewer, create folder bundle
         shell: pwsh
         run: ./scripts/build_windows.ps1
@@ -43,7 +53,7 @@ jobs:
           $env:QT_SCALE_FACTOR = "2"
           $env:QT_QPA_PLATFORM = "windows"
           try {
-            ./.venv-build/Scripts/python.exe -m pytest tests/test_zoom_stability.py tests/test_native_corners.py tests/test_chrome.py tests/test_footer_localization_layout.py tests/test_i18n.py tests/test_i18n_dialogs.py tests/test_settings_redesign.py tests/test_menu_widgets.py tests/test_startup_display.py tests/test_histogram.py tests/test_details_overlay.py tests/test_glass_backdrop.py -q
+            ./.venv-build/Scripts/python.exe -m pytest tests/test_zoom_stability.py tests/test_native_corners.py tests/test_chrome.py tests/test_footer_localization_layout.py tests/test_i18n.py tests/test_i18n_dialogs.py tests/test_settings_redesign.py tests/test_menu_widgets.py tests/test_startup_display.py tests/test_histogram.py tests/test_details_overlay.py tests/test_glass_backdrop.py tests/test_dropdown_widgets.py tests/test_tooltip_theme.py tests/test_toast.py tests/test_release_notes.py tests/test_fit_animation.py tests/test_exposure_preview.py tests/test_ui_fonts.py tests/test_editor_ui.py tests/test_editor_integration.py -q
             if ($LASTEXITCODE -ne 0) { throw "High-DPI regression tests failed" }
           } finally {
             Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
@@ -68,10 +78,20 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "Localized popup capture failed: $language" }
               ./.venv-build/Scripts/python.exe -m scripts.render_details_preview --language $language --output "build/ui-evidence/$language/details"
               if ($LASTEXITCODE -ne 0) { throw "Localized Details capture failed: $language" }
+              ./.venv-build/Scripts/python.exe -m scripts.render_dropdown_preview --language $language --output "build/ui-evidence/$language/dropdowns"
+              if ($LASTEXITCODE -ne 0) { throw "Localized dropdown capture failed: $language" }
+              ./.venv-build/Scripts/python.exe -m scripts.render_feedback_preview --language $language --output "build/ui-evidence/$language/feedback"
+              if ($LASTEXITCODE -ne 0) { throw "Localized feedback capture failed: $language" }
+              ./.venv-build/Scripts/python.exe -m scripts.render_editor_preview --language $language --output "build/ui-evidence/$language/editor"
+              if ($LASTEXITCODE -ne 0) { throw "Localized editor capture failed: $language" }
             }
             $env:QT_SCALE_FACTOR = "2"
             ./.venv-build/Scripts/python.exe -m scripts.render_ui_preview --language zh-CN --output build/ui-evidence/zh-CN-200 --width 800
             if ($LASTEXITCODE -ne 0) { throw "Scaled UI capture failed" }
+            ./.venv-build/Scripts/python.exe -m scripts.render_dropdown_preview --language zh-CN --output build/ui-evidence/zh-CN-200/dropdowns
+            if ($LASTEXITCODE -ne 0) { throw "Scaled dropdown capture failed" }
+            ./.venv-build/Scripts/python.exe -m scripts.render_feedback_preview --language zh-CN --output build/ui-evidence/zh-CN-200/feedback
+            if ($LASTEXITCODE -ne 0) { throw "Scaled feedback capture failed" }
           } finally {
             Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
             Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
@@ -135,6 +155,8 @@ jobs:
             build/ui-evidence/**
             build/thumbnail-artifacts/**
             build/thumbnail/Testing/Temporary/*
+            build/launcher/launcher-native-report.json
+            build/launcher/Testing/Temporary/**
             build/Luma/warn-Luma.txt
             dist/Luma/bundle-inventory.txt
           if-no-files-found: ignore

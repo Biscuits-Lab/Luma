@@ -5,7 +5,7 @@ import re
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/thumbnail-validation.yml'
-REQUIRED = ('thumbnails', 'scaled_ui', 'ui_capture', 'installer_ui')
+REQUIRED = ('thumbnails', 'scaled_ui', 'ui_capture', 'installer_ui', 'drop_regression')
 
 
 def test_all_continued_diagnostics_are_covered_by_fail_closed_gate():

@@ -49,6 +49,8 @@ jobs:
             Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
           }
       - name: Verify loaded-image drop regression sensitivity
+        id: drop_regression
+        continue-on-error: true
         shell: pwsh
         run: ./.venv-build/Scripts/python.exe scripts/check_drop_regression.py
       - name: Capture localized native Qt controls
@@ -103,7 +105,7 @@ jobs:
         shell: pwsh
         run: ./scripts/test_installer.ps1 -Installer artifacts/Luma-0.1.3-windows-x64-setup.exe
       - name: Require successful Shell and UI validation before accepting candidate
-        if: steps.thumbnails.outcome != 'success' || steps.scaled_ui.outcome != 'success' || steps.ui_capture.outcome != 'success' || steps.installer_ui.outcome != 'success'
+        if: steps.thumbnails.outcome != 'success' || steps.scaled_ui.outcome != 'success' || steps.ui_capture.outcome != 'success' || steps.installer_ui.outcome != 'success' || steps.drop_regression.outcome != 'success'
         shell: pwsh
         run: throw 'Required Shell or UI validation failed; candidate artifacts are withheld.'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f

@@ -105,6 +105,12 @@ Filename: "{app}\versions\{#PayloadId}\Luma.exe"; Description: "{cm:LaunchLuma}"
 ; No [Registry], [InstallDelete] or [UninstallDelete] entries: shell registration
 ; uses the application's journaled current-user helper; images/settings are never purged.
 [Code]
+const
+  LumaBusyReadWriteAccess = $C0000000; { GENERIC_READ or GENERIC_WRITE }
+  LumaBusyOpenExisting = 3;
+  LumaBusyNormalAttributes = $80;
+  LumaBusyRetryDelayMilliseconds = 50;
+
 var
   ShellRegistrationComplete: Boolean;
   ShellRegistrationFailure: String;
@@ -240,11 +246,6 @@ function LumaBusyCloseHandle(Handle: THandle): BOOL;
 
 function LumaCanExclusivelyOpenBinary(const Path: String;
   var RemainingRetries: Integer): Boolean;
-const
-  ReadWriteAccess = $C0000000; { GENERIC_READ or GENERIC_WRITE }
-  OpenExisting = 3;
-  NormalAttributes = $80;
-  RetryDelayMilliseconds = 50;
 var
   FileHandle: THandle;
   ErrorCode, Attempt: Integer;
@@ -254,8 +255,8 @@ begin
   repeat
     { Probe only: never create, truncate, write bytes, or delete a binary.
       No sharing preserves the existing mapped/in-use binary safety check. }
-    FileHandle := LumaBusyCreateFile(Path, ReadWriteAccess, 0, 0,
-      OpenExisting, NormalAttributes, 0);
+    FileHandle := LumaBusyCreateFile(Path, LumaBusyReadWriteAccess, 0, 0,
+      LumaBusyOpenExisting, LumaBusyNormalAttributes, 0);
     { Inno captures GetLastError when the DLL returns, before its own API calls
       can overwrite it. Do not log or call another DLL before reading this. }
     ErrorCode := DLLGetLastError;
@@ -274,7 +275,7 @@ begin
       Access denied and every other failure remain immediately fail-closed. }
     if ((ErrorCode <> 32) and (ErrorCode <> 33)) or (RemainingRetries <= 0) then Exit;
     RemainingRetries := RemainingRetries - 1;
-    Sleep(RetryDelayMilliseconds);
+    Sleep(LumaBusyRetryDelayMilliseconds);
     Attempt := Attempt + 1;
   until False;
 end;

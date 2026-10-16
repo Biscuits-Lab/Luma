@@ -39,6 +39,35 @@ class LegacyUpdateContracts(unittest.TestCase):
         self.assertNotIn('import updater', source)
         self.assertNotIn('PYINSTALLER_RESET_ENVIRONMENT', source)
 
+    def test_legacy_unnamed_more_requires_exact_description_class_and_process(self):
+        row = {"name": "", "help": "", "class": "QPushButton",
+               "description": "Save As, copy, open and settings",
+               "type": "ControlType.Button", "enabled": True, "offscreen": False,
+               "process": 42}
+        snapshot = {"process": 42, "elements": [row]}
+        self.assertTrue(legacy.action_ready(snapshot, "more"))
+        for key, value in (("class", "Button"), ("description", "Other action"), ("process", 43),
+                           ("enabled", False), ("offscreen", True),
+                           ("type", "ControlType.Window"), ("name", "Unrelated")):
+            with self.subTest(key=key):
+                self.assertFalse(legacy.action_ready({"process": 42, "elements": [{**row, key: value}]}, "more"))
+        self.assertFalse(legacy.action_ready(snapshot, "download"))
+        with self.assertRaisesRegex(AssertionError, "Ambiguous"):
+            legacy.action_ready({"process": 42, "elements": [row, row]}, "more")
+
+    def test_observation_precedes_single_native_invocation(self):
+        script = legacy.UIA_SCRIPT
+        self.assertLess(script.index("[IO.File]::WriteAllText"), script.index("if ($Operation -eq 'invoke')"))
+        self.assertIn("$_.Current.ClassName -ceq 'QPushButton'", script)
+        self.assertIn("GetCurrentPropertyValue(30159)", script)
+        self.assertIn("GetCurrentPropertyValue(30002)", script)
+        self.assertIn("actualId[i] != expectedId[i]", script)
+        self.assertIn("$names -ccontains $descriptions", script)
+        source = (ROOT / "scripts/smoke_update_legacy.py").read_text()
+        invocation = source.split("    def invoke(pid, executable, target):", 1)[1].split("    def process_path", 1)[0]
+        self.assertLess(invocation.index("wait_ui("), invocation.index('"invoke", target'))
+        self.assertEqual(invocation.count('"invoke", target'), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

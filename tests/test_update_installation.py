@@ -68,6 +68,17 @@ class SetupProcess:
 
 
 @pytest.fixture(autouse=True)
+def synthetic_process_image_boundary(monkeypatch):
+    # Protocol tests use synthetic Popen objects, never Windows process handles.
+    # Do not send those test doubles to QueryFullProcessImageNameW on native CI.
+    # Real process objects still take the strict production OS-query path, which
+    # is exercised below and by smoke_update_managed's actual frozen GUI.
+    original = probe.process_executable
+    monkeypatch.setattr(probe, "process_executable", lambda process:
+                        None if isinstance(process, SetupProcess) else original(process))
+
+
+@pytest.fixture(autouse=True)
 def isolated_setup_processes():
     yield
     for process in tuple(installation._RUNNING_SETUPS.values()):
@@ -492,3 +503,37 @@ def test_dll_restore_failure_after_spawn_keeps_pending_guard(tmp_path, managed, 
     with pytest.raises(installation.InstallationPending, match="still running"):
         apply(managed, tmp_path, lambda *a, **k: pytest.fail("parallel setup"))
     process.finish(5)
+
+
+def test_windows_process_query_uses_actual_created_handle(monkeypatch, tmp_path):
+    import ctypes
+    executable = portable_executable(tmp_path)
+    calls = []
+    def query(handle, flags, buffer, length):
+        calls.append((handle, flags))
+        buffer.value = str(executable)
+        return True
+    api = SimpleNamespace(QueryFullProcessImageNameW=query)
+    monkeypatch.setattr(probe.sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: api, raising=False)
+    assert probe.process_executable(SimpleNamespace(_handle=42)) == executable
+    assert calls == [(42, 0)]
+
+
+@pytest.mark.parametrize("has_handle", [False, True])
+def test_windows_process_query_fails_closed_without_handle_or_os_result(monkeypatch, has_handle):
+    import ctypes
+    calls = []
+    def query(*args):
+        calls.append(args)
+        return False
+    monkeypatch.setattr(probe.sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **k: SimpleNamespace(QueryFullProcessImageNameW=query), raising=False)
+    process = SimpleNamespace(_handle=42) if has_handle else SimpleNamespace()
+    with pytest.raises(probe.LaunchError, match="Windows could not verify"):
+        probe.process_executable(process)
+    assert bool(calls) is has_handle
+
+
+def test_synthetic_protocol_process_cannot_claim_independent_os_evidence():
+    assert probe.process_executable(SetupProcess(None)) is None

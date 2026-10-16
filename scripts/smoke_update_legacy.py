@@ -37,7 +37,7 @@ BASE = "https://github.com/Biscuits-Lab/Luma/releases/download/"
 # No external UI automation package. Inspect/invoke only an exact PID whose
 # current executable path is checked again inside the native UIA observer.
 UIA_SCRIPT = r'''
-param([int]$TargetProcess, [string]$ExpectedExe, [string]$Operation, [string]$Target)
+param([int]$TargetProcess, [string]$ExpectedExe, [string]$Operation, [string]$Target, [string]$SnapshotFile)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -AssemblyName UIAutomationClient
@@ -52,6 +52,45 @@ if ($Operation -eq 'shortcut') {
     @{ target=$shell.CreateShortcut($Target).TargetPath } | ConvertTo-Json -Compress
     exit
 }
+# .NET Framework UIA does not expose FullDescription (30159). Read only that
+# native property at the owned control's point, verifying the same runtime ID
+# and PID. This never moves the pointer, focuses a window, or sends input.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+[StructLayout(LayoutKind.Sequential)] public struct LegacyUiaPoint { public int X; public int Y; }
+[ComImport, Guid("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface ILegacyUia {
+    void UnusedCompareElements(); void UnusedCompareRuntimeIds(); void UnusedGetRootElement();
+    void UnusedElementFromHandle();
+    ILegacyUiaElement ElementFromPoint(LegacyUiaPoint point);
+}
+[ComImport, Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface ILegacyUiaElement {
+    void UnusedSetFocus();
+    [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType=VarEnum.VT_I4)] int[] GetRuntimeId();
+    void UnusedFindFirst(); void UnusedFindAll(); void UnusedFindFirstBuildCache();
+    void UnusedFindAllBuildCache(); void UnusedBuildUpdatedCache();
+    [return: MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValue(int property);
+}
+public static class LegacyUiaDescription {
+    public static string Read(int x, int y, int process, int[] expectedId) {
+        ILegacyUia client = null; ILegacyUiaElement element = null;
+        try {
+            client = (ILegacyUia)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("ff48dba4-60ef-4201-aa87-54103eef594e")));
+            element = client.ElementFromPoint(new LegacyUiaPoint { X=x, Y=y });
+            if (Convert.ToInt32(element.GetCurrentPropertyValue(30002)) != process) return "";
+            int[] actualId = element.GetRuntimeId();
+            if (actualId == null || expectedId == null || actualId.Length != expectedId.Length) return "";
+            for (int i=0; i<actualId.Length; i++) if (actualId[i] != expectedId[i]) return "";
+            return element.GetCurrentPropertyValue(30159) as string ?? "";
+        } finally {
+            if (element != null) Marshal.ReleaseComObject(element);
+            if (client != null) Marshal.ReleaseComObject(client);
+        }
+    }
+}
+'@
 $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetProcess)
 $roots = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $condition)
 $elements = @()
@@ -61,6 +100,27 @@ foreach ($root in $roots) {
     if ($children.Count -gt 3000) { throw 'Unexpectedly large owned UI tree' }
     foreach ($child in $children) { $elements += $child }
 }
+$descriptions = @{}
+foreach ($element in $elements) {
+    if ($element.Current.ProcessId -eq $TargetProcess -and -not $element.Current.IsOffscreen -and
+        $element.Current.ClassName -ceq 'QPushButton' -and [string]::IsNullOrEmpty($element.Current.Name)) {
+        $rect = $element.Current.BoundingRectangle
+        if ($rect.Width -gt 0 -and $rect.Height -gt 0) {
+            $runtimeId = $element.GetRuntimeId()
+            $descriptions[($runtimeId -join ',')] = [LegacyUiaDescription]::Read(
+                [int]($rect.X + $rect.Width / 2), [int]($rect.Y + $rect.Height / 2), $TargetProcess, $runtimeId)
+        }
+    }
+}
+$rows = @($elements | ForEach-Object { @{
+  name=$_.Current.Name; help=$_.Current.HelpText; id=$_.Current.AutomationId;
+  class=$_.Current.ClassName; type=$_.Current.ControlType.ProgrammaticName;
+  description=$descriptions[($_.GetRuntimeId() -join ',')];
+  enabled=$_.Current.IsEnabled; offscreen=$_.Current.IsOffscreen; process=$_.Current.ProcessId
+} })
+$snapshot = @{ process=$TargetProcess; path=$p.Path; elements=$rows;
+  modules=@($p.Modules | ForEach-Object { $_.FileName }) }
+if ($SnapshotFile) { [IO.File]::WriteAllText($SnapshotFile, ($snapshot | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false)) }
 if ($Operation -eq 'invoke') {
     $names = switch ($Target) {
       'more' { @('Save As, copy, open and settings') }
@@ -72,7 +132,10 @@ if ($Operation -eq 'invoke') {
     }
     $matches = @($elements | Where-Object {
       $_.Current.ProcessId -eq $TargetProcess -and $_.Current.IsEnabled -and -not $_.Current.IsOffscreen -and
-      (($names -ccontains $_.Current.Name) -or ($Target -eq 'more' -and $names -ccontains $_.Current.HelpText)) -and
+      (($names -ccontains $_.Current.Name) -or ($Target -eq 'more' -and (
+        ($names -ccontains $_.Current.HelpText) -or
+        ([string]::IsNullOrEmpty($_.Current.Name) -and $_.Current.ClassName -ceq 'QPushButton' -and
+         $names -ccontains $descriptions[($_.GetRuntimeId() -join ',')])))) -and
       ($_.Current.ControlType -eq [Windows.Automation.ControlType]::Button -or
        $_.Current.ControlType -eq [Windows.Automation.ControlType]::MenuItem)
     })
@@ -85,13 +148,7 @@ if ($Operation -eq 'invoke') {
     } else { throw 'Owned control exposes no supported accessible action' }
     @{ invoked=$Target; process=$TargetProcess; path=$p.Path } | ConvertTo-Json -Depth 4 -Compress
 } else {
-    $rows = @($elements | ForEach-Object { @{
-      name=$_.Current.Name; help=$_.Current.HelpText; id=$_.Current.AutomationId;
-      type=$_.Current.ControlType.ProgrammaticName; enabled=$_.Current.IsEnabled;
-      offscreen=$_.Current.IsOffscreen; process=$_.Current.ProcessId
-    } })
-    @{ process=$TargetProcess; path=$p.Path; elements=$rows;
-       modules=@($p.Modules | ForEach-Object { $_.FileName }) } | ConvertTo-Json -Depth 6 -Compress
+    $snapshot | ConvertTo-Json -Depth 6 -Compress
 }
 '''
 
@@ -112,6 +169,39 @@ def validate_old_setup(data: bytes) -> None:
 
 def visible_names(snapshot: dict) -> set[str]:
     return {row["name"] for row in snapshot["elements"] if not row["offscreen"]}
+
+
+ACTION_NAMES = {
+    "more": {"Save As, copy, open and settings"},
+    "settings": {"Settings and updates…", "Settings", "设置", "設定"},
+    "check": {"Check for updates"},
+    "download": {"Download and install update"},
+    "launch": {"Launch new version and close Luma"},
+}
+
+
+def action_ready(snapshot: dict, target: str) -> bool:
+    """Match the same bounded native controls used by the invocation observer.
+
+    Public 0.1.2 has one unnamed menu-bearing QPushButton. Its tooltip is Qt
+    FullDescription, not HelpText, so the legacy .NET observer identifies that
+    exact description, class and role combination. Never choose an arbitrary button.
+    """
+    matches = []
+    for row in snapshot["elements"]:
+        if (row["process"] != snapshot["process"] or not row["enabled"] or row["offscreen"]
+                or row["type"] not in {"ControlType.Button", "ControlType.MenuItem"}):
+            continue
+        named = row["name"] in ACTION_NAMES[target]
+        legacy_more = target == "more" and (
+            row.get("help") in ACTION_NAMES[target] or (
+                not row["name"] and row.get("class") == "QPushButton"
+                and row.get("description") in ACTION_NAMES[target]))
+        if named or legacy_more:
+            matches.append(row)
+    if len(matches) > 1:
+        raise AssertionError(f"Ambiguous owned {target} controls: {len(matches)}")
+    return len(matches) == 1
 
 
 def main() -> int:
@@ -156,7 +246,8 @@ def main() -> int:
     def uia(pid: int, executable: Path, operation="snapshot", target="") -> dict:
         command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(script),
                    "-TargetProcess", str(pid), "-ExpectedExe", str(executable),
-                   "-Operation", operation, "-Target", target]
+                   "-Operation", operation, "-Target", target,
+                   "-SnapshotFile", str(output / f"last-{operation}-{target or 'tree'}.json")]
         completed = subprocess.run(command, capture_output=True, timeout=25, encoding="utf-8", errors="replace")
         if completed.returncode:
             raise AssertionError("Owned UIA action failed: " + completed.stderr[-4000:])
@@ -173,6 +264,10 @@ def main() -> int:
         raise TimeoutError(f"Owned UI did not reach {name}; see its last snapshot")
 
     def invoke(pid, executable, target):
+        # A visible top-level HWND does not prove the Qt accessibility tree is
+        # ready. Save every bounded readiness snapshot before invoking once.
+        wait_ui(pid, executable, lambda state: action_ready(state, target),
+                f"before-{len(report['actions']):02d}-{target}")
         report["actions"].append(uia(pid, executable, "invoke", target))
 
     def process_path(pid: int) -> Path:
@@ -199,6 +294,7 @@ def main() -> int:
 
     def inspect_version(executable: Path, expected: str, label: str) -> dict:
         window, pid = wait_window(executable)
+        api.screenshot(window, output / f"{label}-before-settings.png")
         invoke(pid, executable, "more")
         wait_ui(pid, executable, lambda s: bool(visible_names(s) & {"Settings and updates…", "Settings", "设置", "設定"}), label + "-menu")
         invoke(pid, executable, "settings")

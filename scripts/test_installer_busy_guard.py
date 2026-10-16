@@ -34,6 +34,23 @@ class InstallerBusyGuardTests(unittest.TestCase):
         self.wrapper = without_comments(routine("FirstBusyBinary"))
         self.uninstall = without_comments(routine("CurUninstallStepChanged"))
 
+    def test_pascal_script_uses_global_constants_and_only_local_variables(self):
+        global_block = SOURCE.split("[Code]", 1)[1].split("var", 1)[0]
+        for name in ("ReadWriteAccess", "OpenExisting", "NormalAttributes", "RetryDelayMilliseconds"):
+            self.assertIn("LumaBusy" + name + " =", global_block)
+        # Pinned PascalScript accepts local var/label, but not const/type or
+        # nested routines. Inno compilation remains the executable validation.
+        for filename in ("Luma.iss", "LumaUI.iss"):
+            code = (ROOT / "packaging/windows" / filename).read_text(encoding="utf-8")
+            if "[Code]" in code:
+                code = code.split("[Code]", 1)[1]
+            code = without_comments(code)
+            routines = re.split(r"(?m)(?=^(?:function|procedure) \w+)", code)[1:]
+            for declaration in routines:
+                header = re.split(r"\bbegin\b", declaration, maxsplit=1)[0]
+                self.assertNotRegex(header, r"(?m)^\s*(?:const|type)\b")
+        self.assertNotIn("\nconst\n", routine("LumaCanExclusivelyOpenBinary"))
+
     def test_native_signatures_keep_inno_67_handle_and_bool_widths(self):
         declaration = routine("LumaBusyCreateFile")
         self.assertIn("FileName: String; DesiredAccess, ShareMode: DWORD", declaration)
@@ -45,11 +62,11 @@ class InstallerBusyGuardTests(unittest.TestCase):
         self.assertIn("external 'CloseHandle@kernel32.dll stdcall'", close)
 
     def test_open_is_existing_read_write_exclusive_without_side_effect_flags(self):
-        self.assertRegex(self.probe, r"ReadWriteAccess\s*=\s*\$C0000000;")
-        self.assertRegex(self.probe, r"OpenExisting\s*=\s*3;")
-        self.assertRegex(self.probe, r"NormalAttributes\s*=\s*\$80;")
-        self.assertRegex(self.probe, r"LumaBusyCreateFile\(Path, ReadWriteAccess, 0, 0,\s*"
-                                    r"OpenExisting, NormalAttributes, 0\)")
+        self.assertRegex(SOURCE, r"LumaBusyReadWriteAccess\s*=\s*\$C0000000;")
+        self.assertRegex(SOURCE, r"LumaBusyOpenExisting\s*=\s*3;")
+        self.assertRegex(SOURCE, r"LumaBusyNormalAttributes\s*=\s*\$80;")
+        self.assertRegex(self.probe, r"LumaBusyCreateFile\(Path, LumaBusyReadWriteAccess, 0, 0,\s*"
+                                    r"LumaBusyOpenExisting, LumaBusyNormalAttributes, 0\)")
 
     def test_error_is_captured_before_logging_or_another_dll_call(self):
         self.assertRegex(self.probe, r"FileHandle := LumaBusyCreateFile\([^;]+;\s*"
@@ -71,7 +88,7 @@ class InstallerBusyGuardTests(unittest.TestCase):
         self.assertRegex(self.probe, r"if \(\(ErrorCode <> 32\) and \(ErrorCode <> 33\)\) "
                                     r"or \(RemainingRetries <= 0\) then Exit;\s*"
                                     r"RemainingRetries := RemainingRetries - 1;\s*"
-                                    r"Sleep\(RetryDelayMilliseconds\);")
+                                    r"Sleep\(LumaBusyRetryDelayMilliseconds\);")
         self.assertEqual(self.probe.count("Sleep("), 1)
         self.assertNotRegex(self.probe, r"ErrorCode\s*(?:=|<>)\s*5\b")
 
@@ -81,7 +98,7 @@ class InstallerBusyGuardTests(unittest.TestCase):
         self.assertNotIn("Sleep(", self.wrapper)
         self.assertNotIn("RemainingRetries :=", self.scan)
         self.assertEqual(self.probe.count("RemainingRetries :="), 1)
-        self.assertIn("RetryDelayMilliseconds = 50;", self.probe)
+        self.assertIn("LumaBusyRetryDelayMilliseconds = 50;", SOURCE)
         self.assertLessEqual(20 * 50, 1000)
 
     def test_nested_directories_and_files_share_the_same_budget(self):

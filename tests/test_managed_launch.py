@@ -99,6 +99,76 @@ def test_legacy_direct_registration_remains_explicit_and_migrates(installation):
     assert shell.registration_owner(registry).executable == windows(new)
 
 
+def removed_command(installation):
+    _, old, _, registry, windows = installation
+    command = shell.Value(shell.REG_SZ, f'"{windows(old)}" "%1"')
+    registry.seed(*shell._APPLICATION_COMMAND, command)
+    for path in old.parent.iterdir():
+        path.unlink()
+    old.parent.rmdir()
+    return command
+
+
+def test_reinstall_after_uninstall_repairs_removed_payload_open_with_command(installation):
+    root, _, new, registry, windows = installation
+    removed_command(installation)
+    choice = (shell.CLASSES + r"\.png", "")
+    registry.seed(*choice, shell.Value(shell.REG_SZ, "Other.Image"))
+    activate(installation)
+    assert managed.read_active_payload(root).executable == new
+    assert shell.registration_owner(registry).executable == windows(new)
+    assert registry.read(*choice).data == "Other.Image"
+    shell.uninstall(registry)
+    assert registry.read(*shell._APPLICATION_COMMAND) is None
+
+
+@pytest.mark.parametrize("directory", ["existing", "empty", "symlink", "foreign", "arguments"])
+def test_reinstall_does_not_adopt_ambiguous_or_changed_command(installation, tmp_path, directory):
+    root, old, _, registry, windows = installation
+    removed_command(installation)
+    if directory == "existing":
+        old.parent.mkdir()
+        old.write_bytes(b"unvalidated executable")
+    elif directory == "empty":
+        old.parent.mkdir()
+    elif directory == "symlink":
+        try:
+            old.parent.symlink_to(tmp_path, target_is_directory=True)
+        except OSError:
+            pytest.skip("Creating directory symlinks requires Windows developer mode")
+    else:
+        command = (f'"D:\\Other Luma\\versions\\{old.parent.name}\\Luma.exe" "%1"'
+                   if directory == "foreign" else f'"{windows(old)}" --extra "%1"')
+        registry.seed(*shell._APPLICATION_COMMAND, shell.Value(shell.REG_SZ, command))
+    before = snapshot(installation)
+    with pytest.raises(shell.RegistrationConflict):
+        activate(installation)
+    assert snapshot(installation) == before
+
+
+def test_removed_command_transaction_failure_restores_old_bytes_and_pointer(installation):
+    root, _, _, registry, _ = installation
+    original = removed_command(installation)
+    registry.fail_target_calls = {22}
+    with pytest.raises(shell.ShellIntegrationError, match="rolled back"):
+        activate(installation)
+    assert registry.read(*shell._APPLICATION_COMMAND) == original
+    assert shell._read_manifest(registry)[0] is None
+    assert not (root / managed.POINTER_NAME).exists()
+    activate(installation)
+
+
+def test_removed_command_crash_can_recover_and_retry(installation):
+    root, _, new, registry, _ = installation
+    removed_command(installation)
+    registry.crash_on = 22
+    with pytest.raises(SimulatedCrash):
+        activate(installation)
+    activate(installation)
+    assert managed.read_active_payload(root).executable == new
+    assert not (root / managed.JOURNAL_NAME).exists()
+
+
 def test_same_target_repair_and_disabled_thumbnails_keep_payload_owner(installation):
     root, _, new, registry, windows = installation
     activate(installation)

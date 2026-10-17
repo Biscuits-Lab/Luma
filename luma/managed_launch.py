@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import stat
 import threading
@@ -506,6 +506,34 @@ class _Activation:
             raise shell.RecoveryRequired("Activation completed, but its recovery receipt could not be finalized.") from error
 
 
+def _removed_payload_command(root: Path, registry) -> str | None:
+    """Allow only an orphaned Browse/Open With command inside this root.
+
+    Windows can create this unowned value independently of our receipt. An old
+    uninstall correctly preserves it, but its removed payload is no longer in
+    the marker-bearing sibling list on reinstall. Never infer a missing payload
+    from a missing executable alone: its entire directory must be absent.
+    """
+    document, _ = shell._read_manifest(registry)
+    if document is None:
+        value = shell._encoded_value(registry.read(*shell._APPLICATION_COMMAND))
+    elif document.get("adopted_application_command") is True:
+        value = next(change["before"] for change in document["changes"]
+                     if shell._address(change) == shell._APPLICATION_COMMAND)
+    else:
+        return None
+    previous = shell._managed_command_path(value)
+    if (previous is None or previous.parent.parent.parent
+            != PureWindowsPath(_registry_path(root))):
+        return None
+    _plain(root / "versions", directory=True)
+    try:
+        (root / "versions" / previous.parent.name).lstat()
+    except FileNotFoundError:
+        return str(previous)
+    return None
+
+
 def activate_managed_installation(executable: Path, registry=None, *,
                                   allowed_previous_executables=None,
                                   expected_registration=None,
@@ -541,6 +569,11 @@ def activate_managed_installation(executable: Path, registry=None, *,
         allowed = (tuple(path.resolve(strict=True) for path in candidates)
                    if allowed_previous_executables is None else tuple(allowed_previous_executables))
         permitted = {_registry_path(path.resolve(strict=True)).casefold() for path in candidates}
+        if allowed_previous_executables is None and expected_registration is None:
+            removed = _removed_payload_command(root, registry)
+            if removed is not None:
+                allowed = (*allowed, removed)
+                permitted.add(removed.casefold())
         if expected_registration is not None:
             if not isinstance(expected_registration, shell.OwnedRegistration):
                 raise shell.RegistrationConflict("Managed migration requires the exact confirmed owner.")

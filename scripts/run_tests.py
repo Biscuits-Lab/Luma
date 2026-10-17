@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def partition(nodeids, jobs, timings):
+def plan_modules(nodeids, timings):
     """Keep file order/fixtures intact and give every module a fresh Qt app.
 
     Splitting individual cases mixes global font/theme state and repeatedly
@@ -72,6 +72,19 @@ def stop_workers(workers):
         worker['stream'].close()
 
 
+def collect_tests(command, *, env, timeout):
+    process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding='utf-8',
+                               errors='replace')
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except BaseException:
+        stop_process(process)
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('targets', nargs='*', help='Test files, directories or node IDs (default: tests)')
@@ -98,11 +111,10 @@ def main(argv=None):
     selection = ['-k', args.k] if args.k else []
     print(f'Offscreen source tests; {args.jobs} workers; logs: {run}', flush=True)
     try:
-        collected = subprocess.run(
+        collected = collect_tests(
             [sys.executable, '-m', 'pytest', '--collect-only', '-q', '--color=no',
              f'--basetemp={run / "collect-tmp"}', *selection, *targets],
-            cwd=ROOT, env=env, capture_output=True, text=True, encoding='utf-8',
-            errors='replace', timeout=args.timeout)
+            env=env, timeout=args.timeout)
     except subprocess.TimeoutExpired:
         print(f'Collection exceeded {args.timeout:g}s', flush=True)
         return 1
@@ -122,7 +134,7 @@ def main(argv=None):
                    if isinstance(value, (int, float)) and 0 <= value < float('inf')}
     except (OSError, ValueError, AttributeError):
         timings = {}
-    groups = partition(nodes, args.jobs, timings)
+    groups = plan_modules(nodes, timings)
     print(f'{len(nodes)} tests in {len(groups)} isolated modules; up to {args.jobs} at once', flush=True)
     if args.list:
         return 0
@@ -138,12 +150,15 @@ def main(argv=None):
             arguments.write_text('\n'.join(group) + '\n', encoding='utf-8')
             log = prefix.with_suffix('.log')
             stream = log.open('w', encoding='utf-8')
+            scratch = Path(f'{prefix}-scratch')
+            scratch.mkdir()
+            worker_env = dict(env, TEMP=str(scratch), TMP=str(scratch), TMPDIR=str(scratch))
             command = [sys.executable, '-m', 'pytest', '-q', '--color=no', '--durations=10',
                        '-o', 'faulthandler_timeout=60',
                        '-o', f'cache_dir={prefix}-cache',
                        f'--basetemp={prefix}-tmp', f'--junitxml={prefix}.xml', '@' + str(arguments)]
             try:
-                process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=stream,
+                process = subprocess.Popen(command, cwd=ROOT, env=worker_env, stdout=stream,
                                            stderr=subprocess.STDOUT)
             except BaseException:
                 stream.close()

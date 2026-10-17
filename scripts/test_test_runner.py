@@ -13,11 +13,11 @@ def test_partition_preserves_module_order_and_prioritizes_measured_slow_modules(
     nodes = [f'tests/test_capture.py::test_capture[{i}]' for i in range(8)]
     nodes += [f'tests/test_core.py::test_core[{i}]' for i in range(40)]
     times = {node: 3.0 for node in nodes[:8]}
-    groups = runner.partition(nodes, 4, times)
+    groups = runner.plan_modules(nodes, times)
     assert sorted(node for group in groups for node in group) == sorted(nodes)
     assert groups == [nodes[:8], nodes[8:]]
-    assert runner.partition([], 4, {}) == []
-    assert runner.partition(nodes[:1], 4, {}) == [nodes[:1]]
+    assert runner.plan_modules([], {}) == []
+    assert runner.plan_modules(nodes[:1], {}) == [nodes[:1]]
 
 
 def test_junit_counts_setup_errors_skips_and_failures_separately(tmp_path):
@@ -41,18 +41,14 @@ def test_real_child_process_result_and_timeout_propagation(tmp_path, monkeypatch
     monkeypatch.setattr(runner, 'ROOT', tmp_path)
     node = 'tests/test_demo.py::test_demo'
 
-    original_run = subprocess.run
-
     def collect(command, **kwargs):
-        if command[0] == 'taskkill':
-            return original_run(command, **kwargs)
         assert '--collect-only' in command
         assert kwargs['env']['QT_QPA_PLATFORM'] == 'offscreen'
         assert 'LUMA_SHELL_TEST_REAL_REGISTRY' not in kwargs['env']
         return subprocess.CompletedProcess(command, 0, node + '\n\n1 test collected\n', '')
 
     monkeypatch.setenv('LUMA_SHELL_TEST_REAL_REGISTRY', '1')
-    monkeypatch.setattr(runner.subprocess, 'run', collect)
+    monkeypatch.setattr(runner, 'collect_tests', collect)
     original_popen = subprocess.Popen
 
     def worker(command, **kwargs):
@@ -88,7 +84,7 @@ def test_real_child_process_result_and_timeout_propagation(tmp_path, monkeypatch
 @pytest.mark.parametrize('code', [2, 5])
 def test_failed_or_empty_collection_never_starts_workers(tmp_path, monkeypatch, code):
     monkeypatch.setattr(runner, 'ROOT', tmp_path)
-    monkeypatch.setattr(runner.subprocess, 'run', lambda *a, **k:
+    monkeypatch.setattr(runner, 'collect_tests', lambda *a, **k:
                         subprocess.CompletedProcess(a[0], code, 'collection failed', ''))
     monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **k: pytest.fail('must not start workers'))
     assert runner.main([]) == code
@@ -96,7 +92,7 @@ def test_failed_or_empty_collection_never_starts_workers(tmp_path, monkeypatch, 
 
 def test_list_only_does_not_execute_or_skip_over_collection_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, 'ROOT', tmp_path)
-    monkeypatch.setattr(runner.subprocess, 'run', lambda *a, **k:
+    monkeypatch.setattr(runner, 'collect_tests', lambda *a, **k:
                         subprocess.CompletedProcess(a[0], 0, 'tests/test_a.py::test_a\n', ''))
     monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **k: pytest.fail('list only'))
     assert runner.main(['--list']) == 0
@@ -105,7 +101,7 @@ def test_list_only_does_not_execute_or_skip_over_collection_errors(tmp_path, mon
 def test_module_queue_limits_concurrency_and_never_reuses_a_cached_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, 'ROOT', tmp_path)
     nodes = [f'tests/test_module_{i}.py::test_case' for i in range(5)]
-    monkeypatch.setattr(runner.subprocess, 'run', lambda *a, **k:
+    monkeypatch.setattr(runner, 'collect_tests', lambda *a, **k:
                         subprocess.CompletedProcess(a[0], 0, '\n'.join(nodes), ''))
     original_popen = subprocess.Popen
     processes = []

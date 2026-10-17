@@ -511,8 +511,8 @@ def _removed_payload_command(root: Path, registry) -> str | None:
 
     Windows can create this unowned value independently of our receipt. An old
     uninstall correctly preserves it, but its removed payload is no longer in
-    the marker-bearing sibling list on reinstall. Never infer a missing payload
-    from a missing executable alone: its entire directory must be absent.
+    the marker-bearing sibling list on reinstall. Never infer a removed payload
+    from a missing executable alone: its directory must be absent or empty.
     """
     document, _ = shell._read_manifest(registry)
     if document is None:
@@ -527,11 +527,16 @@ def _removed_payload_command(root: Path, registry) -> str | None:
             != PureWindowsPath(_registry_path(root))):
         return None
     _plain(root / "versions", directory=True)
+    directory = root / "versions" / previous.parent.name
     try:
-        (root / "versions" / previous.parent.name).lstat()
+        _plain(directory, directory=True)
     except FileNotFoundError:
         return str(previous)
-    return None
+    except ManagedLaunchError:
+        return None
+    # Uninstall can leave empty directories while retained native handles are
+    # released. Inspect only this ordinary same-root directory; keep it intact.
+    return str(previous) if next(directory.iterdir(), None) is None else None
 
 
 def activate_managed_installation(executable: Path, registry=None, *,

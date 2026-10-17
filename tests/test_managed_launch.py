@@ -109,9 +109,12 @@ def removed_command(installation):
     return command
 
 
-def test_reinstall_after_uninstall_repairs_removed_payload_open_with_command(installation):
-    root, _, new, registry, windows = installation
+@pytest.mark.parametrize("empty_directory", [False, True])
+def test_reinstall_after_uninstall_repairs_removed_payload_open_with_command(installation, empty_directory):
+    root, old, new, registry, windows = installation
     removed_command(installation)
+    if empty_directory:
+        old.parent.mkdir()
     choice = (shell.CLASSES + r"\.png", "")
     registry.seed(*choice, shell.Value(shell.REG_SZ, "Other.Image"))
     activate(installation)
@@ -120,17 +123,19 @@ def test_reinstall_after_uninstall_repairs_removed_payload_open_with_command(ins
     assert registry.read(*choice).data == "Other.Image"
     shell.uninstall(registry)
     assert registry.read(*shell._APPLICATION_COMMAND) is None
+    assert old.parent.exists() == empty_directory
 
 
-@pytest.mark.parametrize("directory", ["existing", "empty", "symlink", "foreign", "arguments"])
+@pytest.mark.parametrize("directory", ["existing", "remaining_file", "symlink", "foreign", "arguments"])
 def test_reinstall_does_not_adopt_ambiguous_or_changed_command(installation, tmp_path, directory):
     root, old, _, registry, windows = installation
     removed_command(installation)
     if directory == "existing":
         old.parent.mkdir()
         old.write_bytes(b"unvalidated executable")
-    elif directory == "empty":
+    elif directory == "remaining_file":
         old.parent.mkdir()
+        (old.parent / "user-file.txt").write_text("preserve this directory")
     elif directory == "symlink":
         try:
             old.parent.symlink_to(tmp_path, target_is_directory=True)
@@ -144,6 +149,37 @@ def test_reinstall_does_not_adopt_ambiguous_or_changed_command(installation, tmp
     with pytest.raises(shell.RegistrationConflict):
         activate(installation)
     assert snapshot(installation) == before
+
+
+@pytest.mark.parametrize("empty_directory", [False, True])
+def test_repaired_reinstall_survives_future_updates_and_another_reinstall(installation, empty_directory, monkeypatch):
+    monkeypatch.setattr(shell.sys, "platform", "win32")
+    monkeypatch.setattr(shell.sys, "frozen", True, raising=False)
+    root, old, new, registry, windows = installation
+    removed_command(installation)
+    if empty_directory:
+        old.parent.mkdir()
+    choice = (shell.CLASSES + r"\.png", "")
+    default = shell.Value(shell.REG_SZ, "Other.Image")
+    registry.seed(*choice, default)
+    launcher = (root / "Luma.exe").read_bytes()
+    activate(installation)
+    for version, char in (("0.1.5", "c"), ("0.1.6", "d")):
+        current = payload(root, version, char)
+        managed.activate_managed_installation(current, registry)
+        assert managed.read_active_payload(root).executable == current
+        assert shell.registration_owner(registry).executable == windows(current)
+        assert registry.read(*shell._APPLICATION_COMMAND).data == f'"{windows(root / "Luma.exe")}" "%1"'
+        assert shell.prepare_startup_registration(current, registry).changed_values == 0
+        assert (root / "Luma.exe").read_bytes() == launcher
+        assert registry.read(*choice) == default
+    managed.prepare_managed_uninstall(current, registry)
+    assert shell._read_manifest(registry)[0] is None
+    assert registry.read(*shell._APPLICATION_COMMAND) is None
+    managed.activate_managed_installation(new, registry)
+    assert managed.read_active_payload(root).executable == new
+    assert shell.registration_owner(registry).executable == windows(new)
+    assert registry.read(*choice) == default
 
 
 def test_removed_command_transaction_failure_restores_old_bytes_and_pointer(installation):

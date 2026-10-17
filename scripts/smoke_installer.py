@@ -331,19 +331,24 @@ def main() -> int:
         # Reproduce an older uninstall preserving a Windows-created, unowned
         # Browse command after the referenced payload directory was removed.
         removed_payload = install_root / "versions" / ("0.0.1-" + "c" * 24)
-        assert not removed_payload.exists()
-        manual_command = f'"{removed_payload / "Luma.exe"}" "%1"'
-        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, APP_COMMAND, 0,
-                               winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, manual_command)
-        install(installer, "reinstall-after-removed-browse-owner")
-        reinstalled, = payloads()
-        assert_owner(reinstalled / "Luma.exe")
-        assert read_active_payload(install_root).executable == (reinstalled / "Luma.exe").resolve(strict=True)
-        uninstall("uninstall-repaired-browse-owner")
-        assert journal() is None and defaults() == before_defaults
-        assert read_value(winreg.HKEY_CURRENT_USER, APP_COMMAND) is None
-        checks.append("reinstall repairs an unowned Open With command for a removed same-root payload; uninstall removes the adopted command and preserves Windows defaults")
+        for empty_directory in (False, True):
+            assert not removed_payload.exists()
+            if empty_directory:
+                removed_payload.mkdir(parents=True)
+            manual_command = f'"{removed_payload / "Luma.exe"}" "%1"'
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, APP_COMMAND, 0,
+                                   winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, manual_command)
+            suffix = "empty" if empty_directory else "missing"
+            install(installer, "reinstall-after-removed-browse-owner-" + suffix)
+            reinstalled, = payloads()
+            assert_owner(reinstalled / "Luma.exe")
+            assert read_active_payload(install_root).executable == (reinstalled / "Luma.exe").resolve(strict=True)
+            uninstall("uninstall-repaired-browse-owner-" + suffix)
+            assert journal() is None and defaults() == before_defaults
+            assert read_value(winreg.HKEY_CURRENT_USER, APP_COMMAND) is None
+            assert removed_payload.exists() == empty_directory
+        checks.append("reinstall repairs an unowned Open With command for a removed same-root payload with missing or empty old directory; uninstall removes the adopted command and preserves Windows defaults")
 
         install(installer, "install-for-portable-owner")
         set_test_owner(ROOT / "dist" / "Luma" / "Luma.exe")

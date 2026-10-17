@@ -40,9 +40,13 @@ only unchanged values owned by the application.
 One bounded installer migration handles Windows' manual Browse/Open With entry:
 an otherwise unowned Applications\\Luma.exe open command may be adopted only if
 it is the exact conventional quoted command for an explicitly validated prior
-payload in the same installation. No extra arguments or unrelated paths qualify.
-Its original bytes are retained only in a narrowly scoped version-2 pending
-journal for failure rollback; the successful version-1 receipt owns the command
+payload in the same installation. Reinstall also recognizes a removed same-root
+payload when there is no active ownership receipt and its directory is absent or
+an ordinary empty directory. Empty directories remain intact; nonempty folders,
+links, extra arguments and unrelated paths never qualify.
+Its original bytes are retained in the pending journal for failure rollback
+(version 2, or version 3 with managed pointer activation); the successful
+version-1 receipt owns the command
 and uninstall removes it. Interrupted adoption must be repaired before uninstall,
 so cleanup cannot leave a command pointing to a payload it is about to delete.
 

@@ -13,6 +13,19 @@ from luma.i18n import set_language
 from luma.ui_fonts import ui_font_families
 
 
+@pytest.fixture(autouse=True)
+def stable_native_tooltip_surface(qapp):
+    # Inspect the final native surface and requested lifetime independently of
+    # the desktop's optional fade-in, which can outlast a 100-ms test tooltip.
+    effects = (Qt.UIEffect.UI_AnimateTooltip, Qt.UIEffect.UI_FadeTooltip)
+    previous = [(effect, QApplication.isEffectEnabled(effect)) for effect in effects]
+    for effect in effects:
+        QApplication.setEffectEnabled(effect, False)
+    yield
+    for effect, enabled in previous:
+        QApplication.setEffectEnabled(effect, enabled)
+
+
 def visible_tip(qapp):
     qapp.processEvents()
     return next(widget for widget in qapp.topLevelWidgets()

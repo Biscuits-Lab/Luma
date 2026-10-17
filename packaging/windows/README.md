@@ -69,6 +69,14 @@ The smoke script refuses developer desktops and self-hosted runners. It verifies
 
 Logs and the pass/fail report are written to `build/installer-smoke/`. Upload that directory with CI diagnostics. A passing lifecycle smoke is not evidence of interactive wizard appearance, SmartScreen behavior, or every Windows/Explorer configuration; manually check a fresh-account install, Windows Default apps selection, real Explorer thumbnail display, upgrade, and uninstall before publishing.
 
+For explicitly requested local visual validation, `scripts/smoke_installer_ui.py
+--local-preview --installer <setup.exe>` opens only the configuration page,
+checks the real controls and directory chooser, then cancels. A private job owns
+every installer process, actions never click Install/Next, and destinations and
+reports stay under `build/installer-ui-local/`. This opt-in preview does not run
+installation, uninstall, registration migration or the lifecycle smoke. Without
+the flag, the disposable hosted-runner guard remains in force.
+
 Implementation references: [Inno Setup non-administrative install](https://jrsoftware.org/ishelp/topic_setup_privilegesrequired.htm), [file handling and restart replacement](https://jrsoftware.org/ishelp/topic_filessection.htm), [appending uninstall logs](https://jrsoftware.org/ishelp/topic_appendnotes.htm), [safe uninstall abort points](https://jrsoftware.org/ishelp/topic_isxfunc_abort.htm).
 
 ## System display language

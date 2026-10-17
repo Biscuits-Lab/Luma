@@ -175,13 +175,21 @@ def test_save_as_lossless_alpha_full_resolution_source_unchanged(tmp_path,format
     assert source.read_bytes()==before
 
 
-def test_save_rejects_source_same_path_hardlink_symlink(tmp_path):
+@pytest.mark.parametrize('alias_kind', ('same', 'hardlink', 'symlink'))
+def test_save_rejects_source_same_path_hardlink_symlink(tmp_path, alias_kind):
     source=tmp_path/'source.png'
     image=fixture_image();image.save(source)
-    alias=tmp_path/'hard.png';alias.hardlink_to(source)
-    link=tmp_path/'sym.png';link.symlink_to(source)
-    for path in (source,alias,link):
-        with pytest.raises(ValueError): export_image(image,EditState(),path,source,'PNG')
+    path = source
+    if alias_kind != 'same':
+        path = tmp_path / f'{alias_kind}.png'
+        try:
+            if alias_kind == 'symlink': path.symlink_to(source)
+            else: path.hardlink_to(source)
+        except OSError as error:
+            if getattr(error, 'winerror', None) == 1314:
+                pytest.skip('Windows token lacks symbolic-link privilege')
+            raise
+    with pytest.raises(ValueError): export_image(image,EditState(),path,source,'PNG')
 
 
 def test_save_refuses_unreviewed_existing_destination_and_bad_extension(tmp_path):

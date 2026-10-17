@@ -146,6 +146,10 @@ class _ComboPopupDecoration(QObject):
         if not isValid(self) or combo is None or not isValid(combo) or not isValid(watched):
             return False
         if watched is getattr(self, 'popup', None):
+            if event.type() == QEvent.Type.Show:
+                # Native combo fade-in can delay Show until after showPopup's
+                # first positioning timer has already run against a hidden popup.
+                combo._popup_position_timer.start(0)
             if event.type() == QEvent.Type.Paint:
                 painter = QPainter(watched)
                 paint_popup_surface(painter, popup_panel_rect(watched))

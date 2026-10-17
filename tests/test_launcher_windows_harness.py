@@ -15,6 +15,41 @@ from native.launcher import test_launcher_windows as launcher
 ERROR_TEXT = "Invalid installation. No other version was started. Run the official Luma Setup to repair it."
 
 
+def test_atomic_fixture_write_retries_transient_windows_contention(tmp_path, monkeypatch):
+    destination = tmp_path / 'active-payload.txt'
+    destination.write_bytes(b'old')
+    original = launcher.os.replace
+    attempts = []
+    def replace(source, target):
+        attempts.append(True)
+        if len(attempts) == 1:
+            error = PermissionError('transient pointer contention')
+            error.winerror = 5
+            raise error
+        return original(source, target)
+    monkeypatch.setattr(launcher.os, 'replace', replace)
+    launcher.atomic_write(destination, b'new')
+    assert len(attempts) == 2 and destination.read_bytes() == b'new'
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_atomic_fixture_write_keeps_old_bytes_after_persistent_denial(tmp_path, monkeypatch):
+    destination = tmp_path / 'active-payload.txt'
+    destination.write_bytes(b'old')
+    clock = iter((0.0, 0.5, 1.1))
+    monkeypatch.setattr(launcher.time, 'monotonic', lambda: next(clock))
+    monkeypatch.setattr(launcher.time, 'sleep', lambda _: None)
+    def denied(*_):
+        error = PermissionError('persistent pointer denial')
+        error.winerror = 5
+        raise error
+    monkeypatch.setattr(launcher.os, 'replace', denied)
+    with pytest.raises(PermissionError):
+        launcher.atomic_write(destination, b'new')
+    assert destination.read_bytes() == b'old'
+    assert list(tmp_path.iterdir()) == [destination]
+
+
 class DialogAPI:
     """Emulate only the Win32 calls used by error-dialog acknowledgment."""
 

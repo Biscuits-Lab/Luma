@@ -46,8 +46,22 @@ try {
     if ($DevelopmentOnly) { $LicenseArgs += "--allow-incomplete" }
     & $Python @LicenseArgs
     if ($LASTEXITCODE -ne 0) { throw "License collection failed; see docs/BUILDING.md." }
-    & $Python -m PyInstaller --clean --noconfirm Luma.spec
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
+    # Resolve wheel libraries and Windows system DLLs without unrelated tools'
+    # PATH entries (for example Poppler's incompatible ICU ABI).
+    $BuildPythonBase = (& $Python -c "import sys; print(sys.base_prefix)").Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Could not locate the build Python runtime." }
+    $PreviousBuildPath = $env:PATH
+    try {
+        $env:PATH = @(
+            (Join-Path $Root '.venv-build/Scripts'),
+            $BuildPythonBase,
+            (Join-Path $BuildPythonBase 'DLLs'),
+            (Join-Path $env:SystemRoot 'System32'),
+            $env:SystemRoot
+        ) -join ';'
+        & $Python -m PyInstaller --clean --noconfirm Luma.spec
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
+    } finally { $env:PATH = $PreviousBuildPath }
     Copy-Item build/thumbnail/Release/LumaThumbnail.dll dist/Luma/LumaThumbnail.dll
     & $Python scripts/verify_bundle.py dist/Luma
     if ($LASTEXITCODE -ne 0) { throw "Bundle verification failed." }

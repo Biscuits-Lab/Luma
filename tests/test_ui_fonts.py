@@ -101,9 +101,15 @@ def test_actual_strings_and_shaped_faces_across_viewer_popup_and_dialogs(qapp, m
         qapp.processEvents()
         QTest.qWait(50)
         QToolTip.showText(settings.close_button.mapToGlobal(QPoint(8, 24)), tr('Close'), settings.close_button)
-        qapp.processEvents()
-        tip = next(widget for widget in qapp.topLevelWidgets()
-                   if widget.objectName() == 'qtooltip_label' and widget.isVisible())
+        tip = None
+        for _ in range(200):
+            qapp.processEvents()
+            tip = next((widget for widget in qapp.topLevelWidgets()
+                        if widget.objectName() == 'qtooltip_label' and widget.isVisible()), None)
+            if tip is not None:
+                break
+            QTest.qWait(10)
+        assert tip is not None, 'Native tooltip did not finish appearing'
         samples.append(('tooltip', tip.text(), tip.font()))
         for name, text, font in samples:
             # Validate the actual owned text before isolating its Han glyph run.

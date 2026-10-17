@@ -44,7 +44,18 @@ def atomic_write(path, data):
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        # Windows can briefly reject a replacement while another test launch
+        # opens the same pointer snapshot. Retry only bounded sharing/access
+        # contention in this test-owned directory; persistent denial still fails.
+        deadline = time.monotonic() + 1.0
+        while True:
+            try:
+                os.replace(temporary, path)
+                break
+            except OSError as error:
+                if getattr(error, 'winerror', None) not in (5, 32, 33) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.005)
     finally:
         temporary.unlink(missing_ok=True)
 

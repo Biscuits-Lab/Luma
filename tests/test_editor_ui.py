@@ -30,7 +30,10 @@ def editor(qapp):
     image.fill(0xff8a6a45)
     dialog=ImageEditorDialog(image,Path('/tmp/luma-editor-original.png'))
     dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
     wait_for(qapp,lambda:dialog._ready)
+    wait_for(qapp,lambda:dialog.isActiveWindow())
     yield dialog
     dialog._saved_state=dialog.state
     dialog.reject()
@@ -281,9 +284,11 @@ def test_editor_dropdowns_share_trigger_width_and_interaction(editor,qapp):
     from luma.dropdown_widgets import DropdownComboBox
     for mode,combo in [('Crop',editor.aspect),('Markup',editor.shape_combo)]:
         editor._tab_changed(mode)
-        qapp.processEvents()
+        wait_for(qapp, lambda: editor._ready)
         assert isinstance(combo,DropdownComboBox)
-        combo.showPopup();qapp.processEvents()
+        combo.showPopup()
+        wait_for(qapp, lambda: (combo.view().window().isVisible()
+                               and combo.popup_panel_rect().width() == combo.width()))
         assert combo.popup_panel_rect().width()==combo.width()
         QTest.keyClick(combo.view(),Qt.Key.Key_Down)
         QTest.keyClick(combo.view(),Qt.Key.Key_Enter)

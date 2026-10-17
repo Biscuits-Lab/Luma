@@ -1,6 +1,8 @@
 """Capture the installer configuration page without ever starting installation.
 
-Only an ephemeral GitHub-hosted Windows runner is allowed. The installer is
+An ephemeral GitHub-hosted Windows runner is the default. Explicit local
+configuration-page previews use --local-preview and a project-local destination.
+The installer is
 created suspended and assigned to a private kill-on-close job before it runs;
 all window inspection/actions are restricted to that job's processes. The only
 UI actions open/cancel its directory chooser, then close its wizard and confirm
@@ -629,25 +631,31 @@ def main() -> int:
     parser.add_argument("--scaled-installer", type=Path,
                         help="Separate test-only DialogFontSize=18 package; not real OS-DPI evidence")
     parser.add_argument("--timeout", type=int, default=60, choices=range(10, 121), metavar="10..120")
+    parser.add_argument("--local-preview", action="store_true",
+                        help="Explicit local configuration-page test; never clicks Install or Next")
     parser.add_argument("--_worker-language", choices=LANGUAGES, help=argparse.SUPPRESS)
     parser.add_argument("--_worker-variant", choices=("native", "font-scale-18", "native-desktop-selected"), help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if (sys.platform != "win32" or os.environ.get("GITHUB_ACTIONS") != "true"
-            or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
+    hosted = (os.environ.get("GITHUB_ACTIONS") == "true"
+              and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted")
+    if sys.platform != "win32" or (not hosted and not args.local_preview):
         raise SystemExit("Refusing installer UI smoke outside an ephemeral GitHub-hosted Windows runner.")
-    output = ROOT / "build/installer-ui"
+    output = ROOT / ("build/installer-ui-local" if args.local_preview else "build/installer-ui")
     output.mkdir(parents=True, exist_ok=True)
+    work_root = output / "work" if args.local_preview else Path(os.environ["RUNNER_TEMP"])
+    work_root.mkdir(parents=True, exist_ok=True)
     if args._worker_language:
         if not args._worker_variant:
             parser.error("A worker requires an explicit variant")
         api = Native()
-        work = Path(tempfile.mkdtemp(prefix="luma-installer-ui-", dir=os.environ["RUNNER_TEMP"]))
+        work = Path(tempfile.mkdtemp(prefix="luma-installer-ui-", dir=work_root))
         row = run_case(api, args.installer.resolve(strict=True), args._worker_language,
                        output, work, args._worker_variant, args.timeout)
         (output / f"{args._worker_variant}-{args._worker_language}.json").write_text(
             json.dumps(row, indent=2, ensure_ascii=False), encoding="utf-8")
         return 0 if row["passed"] else 1
     report = {"passed": False, "cases": [], "capture": "PrintWindow of verified installer HWND only",
+              "execution": "local configuration preview" if args.local_preview else "disposable hosted runner",
               "safety": "No Install/Next clicks; only owned directory chooser/cancellation; private job assigned before initial thread resumes",
               "dpi_scope": "Actual runner/window DPI is recorded. Font-scale stress is not OS DPI testing."}
     try:
@@ -676,6 +684,8 @@ def main() -> int:
                 command = [sys.executable, str(Path(__file__).resolve()), "--installer", str(path),
                            "--_worker-language", language, "--_worker-variant", variant,
                            "--timeout", str(args.timeout)]
+                if args.local_preview:
+                    command.append("--local-preview")
                 try:
                     result = subprocess.run(command, cwd=ROOT, timeout=args.timeout + 35,
                                             capture_output=True, text=True, errors="replace")

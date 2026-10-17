@@ -130,6 +130,17 @@ class _ReductionWorker:
             del outcome
 
 
+class _WorkerLifetime(QObject):
+    """Keep the native destruction receiver on the GUI thread as a QObject."""
+    def __init__(self, worker, parent):
+        super().__init__(parent)
+        self._worker = worker
+
+    @Slot()
+    def close(self):
+        self._worker.close()
+
+
 class MinificationCache(QObject):
     """Lazy, asynchronous 1/2-scale hierarchy with an exact byte-bounded LRU.
 
@@ -243,7 +254,8 @@ native scaling tables and the original display's storage are outside budget.
         self._active = _Job(self._generation, level, QImage(source), width, height)
         if self._worker is None:
             self._worker = _ReductionWorker()
-            self.destroyed.connect(self._worker.close)
+            self._worker_lifetime = _WorkerLifetime(self._worker, self)
+            self.destroyed.connect(self._worker_lifetime.close)
         self._worker.submit(self._active)
         self._poll_timer.start()
 

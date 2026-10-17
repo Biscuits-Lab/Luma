@@ -11,6 +11,12 @@ Use 64-bit Windows and Python 3.12 to create the Windows package. All runtime de
 
 Use `-SkipTests` only for diagnosis, never as release evidence. `-DevelopmentOnly` permits an incomplete notice collection, marks the result and prohibits treating it as a redistributable release. Do not use it for release workflow builds.
 
+The PyInstaller stage uses a process-local PATH containing only the build
+environment, its base Python runtime and Windows system directories. This keeps
+unrelated developer tools from supplying incompatible DLLs during dependency
+analysis (notably a Poppler ICU DLL in place of Windows' ICU interface). The
+original PATH is restored afterward; no user or system environment is changed.
+
 The full bundle is `dist\Luma`; the executable is `dist\Luma\Luma.exe`. `_internal` is required. Keep native DLLs external and replaceable. UPX and one-file mode are disabled. Qt imports/plugins are limited to the Widgets application; WebEngine, Multimedia and QML are excluded. The PNG/ICO icon is a normal replaceable asset.
 
 ## Source preview

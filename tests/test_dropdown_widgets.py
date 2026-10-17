@@ -40,6 +40,8 @@ def open_combo(qapp, combo):
     combo.showPopup()
     qapp.processEvents()
     popup = combo.view().window()
+    assert QTest.qWaitForWindowExposed(popup, 3000)
+    qapp.processEvents()
     assert popup.isVisible()
     return popup
 

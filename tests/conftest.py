@@ -1,4 +1,5 @@
 import os
+import gc
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import pytest
 from PySide6.QtCore import QEvent
@@ -34,4 +35,9 @@ def complete_qt_deferred_deletions(request):
     if 'qapp' in request.fixturenames:
         app = QApplication.instance()
         if app is not None:
+            app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            # Closed test windows can also form Python signal/reference cycles.
+            # Finalize them on the GUI thread while Qt is idle, rather than
+            # reentrantly inside a later test's setStyle/setStyleSheet call.
+            gc.collect()
             app.sendPostedEvents(None, QEvent.Type.DeferredDelete)

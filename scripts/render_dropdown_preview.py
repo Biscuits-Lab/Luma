@@ -11,9 +11,9 @@ import argparse
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRectF, Qt
+from PySide6.QtCore import QAbstractAnimation, QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QFontInfo, QImage, QPainter, QTextLayout
-from PySide6.QtTest import QTest
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QAbstractItemView, QLabel, QMenu, QToolTip
 
 from luma.app import STYLE, ViewerWindow
@@ -46,6 +46,37 @@ def glyph_font_runs(widget):
         records.append({'text': text, 'families': sorted({run.rawFont().familyName()
                                                         for run in layout.glyphRuns()})})
     return records
+
+
+def expose_capture_target(owner, target):
+    """Move the fixture just enough to expose its real control on this screen.
+
+    A 1024px runner at 200% has only 512 logical pixels; the viewer's 800px
+    minimum cannot fit. Keep the actual control visible without shrinking the
+    product or changing display settings. Its owner may remain partly clipped.
+    """
+    app = QApplication.instance()
+    app.processEvents()
+    area = owner.screen().availableGeometry()
+    safe = area.adjusted(12, 12, -12, -12)
+    bounds = QRect(target.mapToGlobal(QPoint()), target.size())
+    if bounds.width() > safe.width() or bounds.height() > safe.height():
+        raise RuntimeError(f'Capture target {bounds.getRect()} exceeds work area {area.getRect()}')
+    x = max(safe.left(), min(bounds.left(), safe.right() + 1 - bounds.width()))
+    y = max(safe.top(), min(bounds.top(), safe.bottom() + 1 - bounds.height()))
+    owner.move(owner.pos() + QPoint(x - bounds.x(), y - bounds.y()))
+    app.processEvents()
+    actual = QRect(target.mapToGlobal(QPoint()), target.size())
+    if not area.contains(actual):
+        raise RuntimeError(f'Capture target stayed offscreen: {actual.getRect()}, work area {area.getRect()}')
+
+
+def wait_for_capture_animation(popup):
+    """Wait for the real fade to finish, including on a busy CI runner."""
+    animation = getattr(popup, 'open_animation', None)
+    if animation is not None and animation.state() == QAbstractAnimation.State.Running:
+        if not QSignalSpy(animation.finished).wait(1000):
+            raise RuntimeError('Popup animation did not finish before capture')
 
 
 def capture(language, output):
@@ -88,14 +119,28 @@ def capture(language, output):
     def snapshot(name, owner, popup, trigger=None, panel=None):
         app.processEvents()
         QTest.qWait(180)
-        save(name, popup.grab())
+        wait_for_capture_animation(popup)
+        if not popup.isVisible():
+            raise RuntimeError(f'{name}: popup is not visible; geometry={popup.geometry().getRect()}')
+        pixmap = popup.grab()
+        if pixmap.isNull():
+            raise RuntimeError(f'{name}: empty popup capture; geometry={popup.geometry().getRect()}, '
+                               f'work area={popup.screen().availableGeometry().getRect()}')
+        if panel is not None:
+            panel = panel()
+        save(name, pixmap)
         composite = owner.grab()
         painter = QPainter(composite)
-        painter.drawPixmap(owner.mapFromGlobal(popup.pos()), popup.grab())
+        painter.drawPixmap(owner.mapFromGlobal(popup.pos()), pixmap)
         painter.end()
         save(name + '-in-window', composite)
-        image = popup.grab().toImage()
+        image = pixmap.toImage()
+        area = popup.screen().availableGeometry()
         record = {
+            'available_screen': list(area.getRect()),
+            'owner_geometry': list(owner.geometry().getRect()),
+            'owner_inside_available_screen': area.contains(owner.geometry()),
+            'pixel_size': [image.width(), image.height()],
             'geometry': [popup.x(), popup.y(), popup.width(), popup.height()],
             'device_pixel_ratio': image.devicePixelRatio(),
             'corner_alpha': [image.pixelColor(x, y).alpha() for x, y in
@@ -106,12 +151,18 @@ def capture(language, output):
         if panel is not None and trigger is not None:
             visible = panel.translated(popup.x(), popup.y())
             record.update({
+                'trigger_geometry': list(QRect(trigger.mapToGlobal(QPoint()), trigger.size()).getRect()),
+                'trigger_inside_available_screen': area.contains(QRect(trigger.mapToGlobal(QPoint()), trigger.size())),
                 'panel_width': panel.width(), 'trigger_width': trigger.width(),
                 'panel_left': visible.left(), 'trigger_left': trigger.mapToGlobal(QPoint()).x(),
                 'panel_inside_available_screen': QRectF(popup.screen().availableGeometry()).contains(visible),
             })
             if record['panel_width'] != record['trigger_width']:
                 raise RuntimeError(f'{name}: panel width differs from trigger')
+            if not record['trigger_inside_available_screen'] or not record['panel_inside_available_screen']:
+                raise RuntimeError(f'{name}: trigger or popup panel is outside the work area: {record}')
+            if record['panel_left'] != record['trigger_left']:
+                raise RuntimeError(f'{name}: popup panel is not aligned with its visible trigger: {record}')
         if app.platformName() == 'windows':
             desktop = popup.screen().grabWindow(0)
             if desktop.isNull():
@@ -120,20 +171,23 @@ def capture(language, output):
         records[name] = record
 
     for name, combo in [('details-channel', window.channel), ('details-tone', window.tone)]:
+        expose_capture_target(window, combo)
         combo.showPopup()
-        snapshot(name, window, combo.view().window(), combo, combo.popup_panel_rect())
+        snapshot(name, window, combo.view().window(), combo, combo.popup_panel_rect)
         combo.hidePopup()
+    expose_capture_target(window, window.zoom_combo)
     menu = window.zoom_combo.menu()
     menu.popup(window.zoom_combo.mapToGlobal(QPoint(0, window.zoom_combo.height())))
-    snapshot('footer-zoom', window, menu, window.zoom_combo, menu.panel_rect())
+    snapshot('footer-zoom', window, menu, window.zoom_combo, menu.panel_rect)
     menu.close()
     settings = UpdateDialog(window, '0.1.4')
     settings.show()
     app.processEvents()
     snapshot('settings-frameless', settings, settings)
     background = settings.display_panel.background
+    expose_capture_target(settings, background)
     background.showPopup()
-    snapshot('settings-background', settings, background.view().window(), background, background.popup_panel_rect())
+    snapshot('settings-background', settings, background.view().window(), background, background.popup_panel_rect)
     background.hidePopup()
     app.processEvents()
     QTest.qWait(30)
@@ -153,7 +207,7 @@ def capture(language, output):
                          'available_geometry': list(screen.availableGeometry().getRect()),
                          'device_pixel_ratio': screen.devicePixelRatio()},
               'device_pixel_ratio': records['footer-zoom']['device_pixel_ratio'],
-              'capture': 'Actual Qt widgets; in-window views composite real popup pixels. Only windows-desktop PNGs are native desktop evidence.',
+              'capture': 'Actual Qt widgets; in-window views composite real popup pixels. Only windows-desktop PNGs are native desktop evidence. Owners may be repositioned and partly clipped; per-widget geometry records describe each frame.',
               'screenshots': screenshots, 'widgets': records}
     path = output / f'dropdown-preview-{suffix}.json'
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding='utf-8')

@@ -17,6 +17,7 @@ from luma.dropdown_widgets import DropdownComboBox, SHADOW_MARGIN, anchored_popu
 from luma.i18n import set_language, tr
 from luma.menu_widgets import DropdownMenu
 from luma.updater import UpdateDialog
+from scripts.render_dropdown_preview import expose_capture_target, wait_for_capture_animation
 
 
 @pytest.fixture
@@ -178,10 +179,17 @@ def test_viewer_settings_use_shared_controls_and_zoom_options_keep_semantics(qap
         for font_size in (12, 20):
             window.zoom_combo.setStyleSheet(window.zoom_combo.styleSheet() + f' QPushButton {{font-size: {font_size}px;}}')
             qapp.processEvents()
+            # Exact alignment requires a visible trigger. At 200% the native
+            # runner's 512px desktop is narrower than the 800px viewer minimum.
+            expose_capture_target(window, window.zoom_combo)
+            trigger = QRect(window.zoom_combo.mapToGlobal(QPoint()), window.zoom_combo.size())
+            assert window.screen().availableGeometry().contains(trigger)
             menu.popup(window.zoom_combo.mapToGlobal(QPoint()))
             qapp.processEvents()
             QTest.qWait(160)
+            wait_for_capture_animation(menu)
             assert menu.panel_rect().width() == window.zoom_combo.width()
+            assert window.screen().availableGeometry().contains(menu.panel_rect().translated(menu.pos()).toAlignedRect())
             assert menu.x() + menu.panel_rect().left() == window.zoom_combo.mapToGlobal(QPoint()).x()
             assert all(menu.rect().contains(menu.actionGeometry(action)) for action in menu.actions())
             assert_alpha_surface(menu, menu.panel_rect())
@@ -195,7 +203,9 @@ def test_viewer_settings_use_shared_controls_and_zoom_options_keep_semantics(qap
         menu.actions()[2].trigger()
         assert window.canvas.zoom_percent == pytest.approx(100)
         menu.actions()[-1].trigger()
-        assert window.canvas.transform().m11() == pytest.approx(1)
+        # Actual size means one image pixel per physical display pixel.
+        assert (window.canvas.transform().m11() *
+                window.canvas.viewport().devicePixelRatioF()) == pytest.approx(1)
     finally:
         settings.close()
         window.close()
@@ -249,18 +259,19 @@ def test_settings_shell_fits_small_negative_origin_work_area(qapp, monkeypatch):
         window.close()
 
 
+@pytest.mark.parametrize('screen_size', [(3200, 2200), (1024, 720)])
 @pytest.mark.parametrize('factor,language', [('1', 'en'), ('1.25', 'zh-CN'), ('1.5', 'zh-TW'), ('2', 'zh-CN')])
-def test_fresh_high_dpi_real_popup_capture(tmp_path, factor, language):
+def test_fresh_high_dpi_real_popup_capture(tmp_path, factor, language, screen_size):
     # Windows already supplies a drive colon. Include one in the POSIX parent
     # directory too, so restoring an absolute QPA config path fails on Linux.
     tmp_path = tmp_path / ('capture files' if sys.platform == 'win32' else 'C: capture files')
     tmp_path.mkdir()
-    # Give the offscreen platform a realistic 3K desktop rather than its 800px
-    # default. Scaling an 800px physical desktop to 200% otherwise puts half
-    # of the viewer's intentionally 800-logical-pixel minimum offscreen.
+    # Cover both a roomy 3K desktop and the Windows runner's small work area.
+    # The latter deliberately clips the owner at 200%; real controls must
+    # still be exposed, aligned and captured without changing product sizing.
     config = tmp_path / 'screen.json'
     config.write_text(json.dumps({'screens': [{'name': 'QA', 'x': 0, 'y': 0,
-        'width': 3200, 'height': 2200, 'logicalDpi': 96, 'logicalBaseDpi': 96, 'dpr': 1.0}]}))
+        'width': screen_size[0], 'height': screen_size[1], 'logicalDpi': 96, 'logicalBaseDpi': 96, 'dpr': 1.0}]}))
     env = os.environ.copy()
     # Qt splits platform arguments on every ':', including a Windows drive
     # prefix. Run beside the config and pass only its relative name: the
@@ -284,11 +295,15 @@ def test_fresh_high_dpi_real_popup_capture(tmp_path, factor, language):
     assert record['platform'] == 'offscreen'
     assert record['screen']['name'] == 'QA'
     assert record['screen']['available_geometry'] == [
-        0, 0, round(3200 / float(factor)), round(2200 / float(factor))]
+        0, 0, round(screen_size[0] / float(factor)), round(screen_size[1] / float(factor))]
     assert record['screen']['device_pixel_ratio'] == float(factor)
+    if screen_size[0] / float(factor) < 800:
+        assert not record['widgets']['footer-zoom']['owner_inside_available_screen']
     for name, widget in record['widgets'].items():
+        assert all(dimension > 0 for dimension in widget['pixel_size']), name
         assert widget['corner_alpha'] == [0, 0, 0, 0], name
         if 'panel_width' in widget:
+            assert widget['trigger_inside_available_screen'], name
             assert widget['panel_width'] == widget['trigger_width']
             assert widget['panel_left'] == widget['trigger_left']
             assert widget['panel_inside_available_screen']

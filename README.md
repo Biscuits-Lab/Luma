@@ -23,6 +23,7 @@ Opening, browsing and display rotation do not change the original file. Copy/Sav
 
 - 双击 `预览.bat`：首次创建项目内虚拟环境并安装依赖，然后打开 Luma
 - 双击 `打包.bat`：在 Windows 上测试并生成 `dist\Luma\Luma.exe`
+- 双击 `测试.bat`：复用现有环境，以 4 个独立离屏进程并行跑全部源码测试，不打包
 - 首次运行需要已安装的 64 位 Python 3.12 或更新的兼容版本，并联网下载依赖；预览脚本优先复用项目虚拟环境，不会安装系统运行时
 - 只检查运行环境、不打开窗口：`powershell -NoProfile -File .\scripts\preview.ps1 -CheckOnly`
 
@@ -62,10 +63,19 @@ PyInstaller builds for its host OS. A Linux smoke bundle is **not** a Windows EX
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-$env:QT_QPA_PLATFORM = "offscreen"
-.\.venv\Scripts\python.exe -m pytest
-Remove-Item Env:QT_QPA_PLATFORM
+# Daily source regression: all tests, parallel offscreen workers, no packaging
+.\.venv\Scripts\python.exe scripts/run_tests.py
+# Focus on the changed feature
+.\.venv\Scripts\python.exe scripts/run_tests.py tests/test_editor_ui.py
+# Include installer/release policy unit tests too
+.\.venv\Scripts\python.exe scripts/run_tests.py --contracts
 ```
+
+`测试.bat` discovers an existing project test environment; it does not install
+dependencies on every run. Use `--jobs 1` for a serial comparison or a low-memory
+machine. Each run writes worker logs, JUnit XML, and `report.json` under
+`build/test-runs/run-*`. Timing history balances the work; every selected test
+is executed again. Native Windows release validation remains in `打包.bat` and CI.
 
 Offscreen tests can exercise logic and widgets; they do not certify native Windows behavior. Decoder regression coverage is described in [FORMATS.md](docs/FORMATS.md). A real camera RAW fixture and a camera-model matrix are separate from unit tests that mock the LibRaw interface.
 

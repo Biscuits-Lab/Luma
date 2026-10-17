@@ -11,6 +11,44 @@ Use 64-bit Windows and Python 3.12 to create the Windows package. All runtime de
 
 Use `-SkipTests` only for diagnosis, never as release evidence. `-DevelopmentOnly` permits an incomplete notice collection, marks the result and prohibits treating it as a redistributable release. Do not use it for release workflow builds.
 
+## Fast daily verification
+
+Use `测试.bat` or the runner below for normal source changes. It runs the full
+selected suite with independent offscreen Qt processes (up to four by default),
+without reinstalling dependencies, compiling native components or packaging.
+Each test module gets a fresh process, with its original case order and fixtures,
+so global Qt/font/theme state cannot accumulate across modules. All parameter
+cases, including the DPI/screenshot matrix, remain. A nonzero worker exit, crash, timeout or
+missing/incomplete result makes the run fail.
+
+```powershell
+.\.venv-build\Scripts\python.exe scripts/run_tests.py
+# A targeted regression, including a pytest -k expression
+.\.venv-build\Scripts\python.exe scripts/run_tests.py tests/test_dropdown_widgets.py -k popup
+# Include scripts/test_*.py policy contracts
+.\.venv-build\Scripts\python.exe scripts/run_tests.py --contracts
+# Serial execution or collection only
+.\.venv-build\Scripts\python.exe scripts/run_tests.py --jobs 1
+.\.venv-build\Scripts\python.exe scripts/run_tests.py --list
+```
+
+Worker logs, JUnit XML, selections and the aggregate `report.json` are saved in
+`build/test-runs/run-*`. Each worker has its own pytest cache and temporary
+directory. The default timeout is 300 seconds per worker and collection; use
+`--timeout` to adjust it. Measured durations only balance the next run, never
+cache a pass or skip execution. Ctrl+C stops this invocation's workers.
+The runner disables the opt-in real-registry suite, which remains in the serial
+disposable native Windows acceptance job. Use the existing build/CI gates for
+native UI, Shell, installer and frozen-executable acceptance.
+
+For a local development bundle, run `scripts/build_windows.ps1 -DevelopmentOnly`:
+source tests use this parallel runner and PyInstaller can reuse its analysis
+cache. Add `-Clean` to force a clean development bundle. Normal release builds
+still use native Windows tests and clean PyInstaller analysis. Both build modes
+reuse the environment only when requirement/project hashes, pinned installed
+versions, required imports and the editable source location still match;
+otherwise the original dependency installation runs again.
+
 The PyInstaller stage uses a process-local PATH containing only the build
 environment, its base Python runtime and Windows system directories. This keeps
 unrelated developer tools from supplying incompatible DLLs during dependency

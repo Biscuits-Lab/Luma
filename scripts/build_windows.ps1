@@ -2,7 +2,8 @@
 param(
     [string]$PythonVersion = "3.12",
     [switch]$SkipTests,
-    [switch]$DevelopmentOnly
+    [switch]$DevelopmentOnly,
+    [switch]$Clean
 )
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -19,19 +20,64 @@ try {
     $Python = Join-Path $Root ".venv-build\Scripts\python.exe"
     & $Python -c "import sys, struct; assert sys.version_info >= (3,12); assert struct.calcsize('P') == 8, 'Use 64-bit Python'"
     if ($LASTEXITCODE -ne 0) { throw "Unsupported Python interpreter." }
-    & $Python -m pip install --only-binary=:all: -r requirements-dev.txt
-    if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed. No source compilation fallback was attempted." }
-    & $Python -m pip install --no-build-isolation --no-deps -e .
-    if ($LASTEXITCODE -ne 0) { throw "Luma installation failed." }
-    if (!$SkipTests) {
-        $PreviousQtPlatform = $env:QT_QPA_PLATFORM
-        $env:QT_QPA_PLATFORM = "windows"
+    $EnvironmentHash = (@('requirements.txt', 'requirements-dev.txt', 'pyproject.toml') |
+        ForEach-Object { (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash }) -join ':'
+    $EnvironmentStamp = Join-Path $Root '.venv-build/.luma-build-environment.sha256'
+    $SavedEnvironment = if (Test-Path -LiteralPath $EnvironmentStamp) {
+        (Get-Content -LiteralPath $EnvironmentStamp -Raw).Trim()
+    } else { '' }
+    $EnvironmentValid = $false
+    if ($SavedEnvironment -eq $EnvironmentHash) {
+        # A hash alone must not hide missing, broken or manually changed wheels.
+        $EnvironmentCheck = @'
+import importlib.metadata as metadata
+import json, tomllib
+from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
+from PySide6 import QtCore, QtGui, QtWidgets
+import numpy, PIL.Image, OpenEXR, rawpy, PyInstaller
+for filename in ('requirements.txt', 'requirements-dev.txt'):
+    for line in Path(filename).read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if line and not line.startswith(('#', '-r')):
+            name, version = line.split('==')
+            assert metadata.version(name) == version, name
+project = tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))['project']
+dist = metadata.distribution(project['name'])
+assert dist.version == project['version']
+source = json.loads(dist.read_text('direct_url.json'))
+assert source['dir_info']['editable']
+assert Path(url2pathname(urlsplit(source['url']).path)).resolve() == Path.cwd().resolve()
+'@
         try {
-            & $Python -m pytest
-            if ($LASTEXITCODE -ne 0) { throw "Tests failed; packaging stopped." }
-        } finally {
-            if ($null -eq $PreviousQtPlatform) { Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue }
-            else { $env:QT_QPA_PLATFORM = $PreviousQtPlatform }
+            & $Python -c $EnvironmentCheck 2>$null
+            $EnvironmentValid = $LASTEXITCODE -eq 0
+        } catch { $EnvironmentValid = $false }
+    }
+    if (!$EnvironmentValid) {
+        & $Python -m pip install --only-binary=:all: -r requirements-dev.txt
+        if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed. No source compilation fallback was attempted." }
+        & $Python -m pip install --no-build-isolation --no-deps -e .
+        if ($LASTEXITCODE -ne 0) { throw "Luma installation failed." }
+        Set-Content -LiteralPath $EnvironmentStamp -Value $EnvironmentHash
+    } else {
+        Write-Host 'Reusing verified pinned build dependencies; no pip installation needed.'
+    }
+    if (!$SkipTests) {
+        if ($DevelopmentOnly) {
+            & $Python scripts/run_tests.py
+            if ($LASTEXITCODE -ne 0) { throw "Offscreen source tests failed; development packaging stopped." }
+        } else {
+            $PreviousQtPlatform = $env:QT_QPA_PLATFORM
+            $env:QT_QPA_PLATFORM = "windows"
+            try {
+                & $Python -m pytest
+                if ($LASTEXITCODE -ne 0) { throw "Tests failed; packaging stopped." }
+            } finally {
+                if ($null -eq $PreviousQtPlatform) { Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue }
+                else { $env:QT_QPA_PLATFORM = $PreviousQtPlatform }
+            }
         }
     }
     & cmake -S native/thumbnail -B build/thumbnail -A x64 -DBUILD_TESTING=ON
@@ -59,7 +105,9 @@ try {
             (Join-Path $env:SystemRoot 'System32'),
             $env:SystemRoot
         ) -join ';'
-        & $Python -m PyInstaller --clean --noconfirm Luma.spec
+        $BundleArguments = @('-m', 'PyInstaller', '--noconfirm', 'Luma.spec')
+        if (!$DevelopmentOnly -or $Clean) { $BundleArguments += '--clean' }
+        & $Python @BundleArguments
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
     } finally { $env:PATH = $PreviousBuildPath }
     Copy-Item build/thumbnail/Release/LumaThumbnail.dll dist/Luma/LumaThumbnail.dll

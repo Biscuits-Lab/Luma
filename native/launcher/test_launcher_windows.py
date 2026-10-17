@@ -72,13 +72,20 @@ class Windows:
         u.EnumChildWindows.argtypes = [wintypes.HWND, self.enum_callback, wintypes.LPARAM]
         u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        u.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        u.GetClassNameW.restype = ctypes.c_int
         u.IsWindowVisible.argtypes = [wintypes.HWND]
         u.IsWindowVisible.restype = wintypes.BOOL
-        u.GetDlgItem.argtypes = [wintypes.HWND, ctypes.c_int]
-        u.GetDlgItem.restype = wintypes.HWND
+        u.IsWindowEnabled.argtypes = [wintypes.HWND]
+        u.IsWindowEnabled.restype = wintypes.BOOL
+        u.GetDlgCtrlID.argtypes = [wintypes.HWND]
+        u.GetDlgCtrlID.restype = ctypes.c_int
+        u.GetParent.argtypes = [wintypes.HWND]
+        u.GetParent.restype = wintypes.HWND
         u.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         u.PostMessageW.restype = wintypes.BOOL
         self.dialogs = []
+        self.dialog_observations = []
         self.acknowledged_dialogs = set()
 
     def verify_resources(self, executable):
@@ -174,20 +181,49 @@ class Windows:
                 return True
             self.user.EnumChildWindows(hwnd, child, 0)
             texts = []
+            controls = []
             for child_hwnd in children:
                 text = ctypes.create_unicode_buffer(4096)
                 self.user.GetWindowTextW(child_hwnd, text, len(text))
                 if text.value:
                     texts.append(text.value)
+                class_name = ctypes.create_unicode_buffer(256)
+                self.user.GetClassNameW(child_hwnd, class_name, len(class_name))
+                child_owner = wintypes.DWORD()
+                self.user.GetWindowThreadProcessId(child_hwnd, ctypes.byref(child_owner))
+                controls.append({"hwnd": child_hwnd, "pid": child_owner.value,
+                    "class": class_name.value, "control_id": self.user.GetDlgCtrlID(child_hwnd),
+                    "parent_hwnd": self.user.GetParent(child_hwnd), "title": text.value,
+                    "visible": bool(self.user.IsWindowVisible(child_hwnd)),
+                    "enabled": bool(self.user.IsWindowEnabled(child_hwnd))})
             message = "\n".join(texts)
-            button = self.user.GetDlgItem(hwnd, 1)  # IDOK, independent of UI locale
-            require(button, f"Launcher error dialog has no OK control: {message}")
-            # A button's WM_COMMAND notification carries its HWND in lParam.
-            # Zero means a menu command and can leave MessageBoxW waiting forever.
+            observation = {"pid": pid, "hwnd": hwnd, "title": title.value,
+                           "controls": controls, "acknowledgment": None}
+            self.dialog_observations.append(observation)
+            # MB_OK guarantees one pushbutton, not that its private control ID
+            # equals MessageBoxW's public return value IDOK. Discover the actual
+            # button without depending on a localized caption or fixed ID.
+            # EnumChildWindows includes nested descendants, so use its real parent.
+            buttons = [item for item in controls if item["class"].lower() == "button"
+                       and item["visible"] and item["enabled"]]
+            require(len(buttons) == 1,
+                    f"Launcher error dialog expected one visible enabled native button: {observation}")
+            button = buttons[0]
+            require(button["pid"] == pid,
+                    f"Launcher error dialog button belongs to another process: {observation}")
+            parents = {hwnd, *(item["hwnd"] for item in controls if item["pid"] == pid)}
+            require(button["parent_hwnd"] in parents and button["parent_hwnd"] != button["hwnd"],
+                    f"Launcher error dialog button parent is outside its owned subtree: {observation}")
+            require(0 < button["control_id"] <= 0xffff,
+                    f"Launcher error dialog button has no valid command ID: {observation}")
+            # BN_CLICKED carries the actual control ID and HWND to its parent.
             # Keep assertions outside ctypes callbacks, which swallow exceptions.
             # https://learn.microsoft.com/en-us/windows/win32/controls/bn-clicked
-            require(self.user.PostMessageW(hwnd, 0x0111, 1, button),  # WM_COMMAND, BN_CLICKED | IDOK
-                    f"Could not acknowledge launcher error dialog: {ctypes.get_last_error()}; {message}")
+            observation["acknowledgment"] = {"parent_hwnd": button["parent_hwnd"],
+                "control_id": button["control_id"], "button_hwnd": button["hwnd"], "posted": False}
+            require(self.user.PostMessageW(button["parent_hwnd"], 0x0111, button["control_id"], button["hwnd"]),
+                    f"Could not acknowledge launcher error dialog: {ctypes.get_last_error()}; {observation}")
+            observation["acknowledgment"]["posted"] = True
             self.acknowledged_dialogs.add((pid, hwnd))
             found.append(message)
         self.dialogs.extend(found)
@@ -333,7 +369,8 @@ def verify_deletion_fence(api, source: Path, directory: Path, evidence: list) ->
 def run(args):
     require(sys.platform == "win32", "This is a native Windows test; do not label Linux tests as Windows evidence")
     api = Windows()
-    report = {"platform": sys.platform, "launcher_sha256": digest(args.launcher), "native_executed": True, "checks": []}
+    report = {"platform": sys.platform, "launcher_sha256": digest(args.launcher), "native_executed": True,
+              "checks": [], "dialog_observations": api.dialog_observations}
     evidence = report["checks"]
     args.report.parent.mkdir(parents=True, exist_ok=True)
     try:

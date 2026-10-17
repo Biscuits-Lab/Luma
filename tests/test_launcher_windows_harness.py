@@ -1,6 +1,7 @@
 """Portable harness regressions; only Windows CI proves native launcher behavior."""
 import ctypes
 from ctypes import wintypes
+import json
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -20,15 +21,18 @@ class DialogAPI:
     dialog = 0x123400000001
     button = 0x123400000002
 
-    def __init__(self, *, button=True, post=True, enumerate=True):
-        self.ok_control = self.button if button else None
+    def __init__(self, *, button=True, post=True, enumerate=True, control_id=2):
         self.post_result = post
         self.enum_result = enumerate
         self.posted = []
         self.owners = {self.dialog: 42, 11: 99, 12: 42, 13: 42}
         self.titles = {self.dialog: "Luma could not start", 11: "Luma could not start",
-                       12: "Unrelated window", 13: "Luma could not start",
-                       self.button: "确定", 21: ERROR_TEXT}
+                       12: "Unrelated window", 13: "Luma could not start"}
+        self.controls = {21: {"class": "Static", "control_id": 0xffff, "parent_hwnd": self.dialog,
+                             "pid": 42, "title": ERROR_TEXT, "visible": True, "enabled": True}}
+        if button:
+            self.controls[self.button] = {"class": "Button", "control_id": control_id,
+                "parent_hwnd": self.dialog, "pid": 42, "title": "确定", "visible": True, "enabled": True}
 
     def EnumWindows(self, callback, parameter):
         if not self.enum_result:
@@ -38,24 +42,35 @@ class DialogAPI:
         return True
 
     def GetWindowThreadProcessId(self, hwnd, owner):
-        ctypes.cast(owner, ctypes.POINTER(wintypes.DWORD)).contents.value = self.owners[hwnd]
+        pid = self.controls[hwnd]["pid"] if hwnd in self.controls else self.owners[hwnd]
+        ctypes.cast(owner, ctypes.POINTER(wintypes.DWORD)).contents.value = pid
         return 1
 
     def IsWindowVisible(self, hwnd):
-        return hwnd != 13
+        return self.controls[hwnd]["visible"] if hwnd in self.controls else hwnd != 13
+
+    def IsWindowEnabled(self, hwnd):
+        return self.controls[hwnd]["enabled"]
 
     def GetWindowTextW(self, hwnd, buffer, size):
-        buffer.value = self.titles[hwnd][:size - 1]
+        title = self.controls[hwnd]["title"] if hwnd in self.controls else self.titles[hwnd]
+        buffer.value = title[:size - 1]
+        return len(buffer.value)
+
+    def GetClassNameW(self, hwnd, buffer, size):
+        buffer.value = self.controls[hwnd]["class"][:size - 1]
         return len(buffer.value)
 
     def EnumChildWindows(self, hwnd, callback, parameter):
         assert hwnd == self.dialog
-        for child in (self.button, 21):
+        for child in self.controls:
             assert callback(child, parameter)
 
-    def GetDlgItem(self, hwnd, control):
-        assert (hwnd, control) == (self.dialog, 1)
-        return self.ok_control
+    def GetDlgCtrlID(self, hwnd):
+        return self.controls[hwnd]["control_id"]
+
+    def GetParent(self, hwnd):
+        return self.controls[hwnd]["parent_hwnd"]
 
     def PostMessageW(self, *args):
         self.posted.append(args)
@@ -72,6 +87,7 @@ def dialog_harness(monkeypatch):
         api.user = DialogAPI(**kwargs)
         api.enum_callback = lambda callback: callback
         api.dialogs = []
+        api.dialog_observations = []
         api.acknowledged_dialogs = set()
         return api
     return create
@@ -82,29 +98,88 @@ def test_dialog_api_uses_pointer_sized_control_handle(monkeypatch):
     monkeypatch.setattr(ctypes, "WinDLL", lambda name, **_: libraries[name], raising=False)
     monkeypatch.setattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE, raising=False)
     api = launcher.Windows()
-    assert api.user.GetDlgItem.argtypes == [wintypes.HWND, ctypes.c_int]
-    assert api.user.GetDlgItem.restype is wintypes.HWND
+    assert api.user.GetParent.argtypes == [wintypes.HWND]
+    assert api.user.GetParent.restype is wintypes.HWND
+    assert api.user.GetDlgCtrlID.argtypes == [wintypes.HWND]
+    assert api.user.GetDlgCtrlID.restype is ctypes.c_int
     assert api.user.PostMessageW.argtypes[-1] is wintypes.LPARAM
     assert api.user.PostMessageW.restype is wintypes.BOOL
 
 
-def test_acknowledgment_targets_real_ok_control_and_owned_visible_dialog(dialog_harness):
-    api = dialog_harness()
-    assert api.dismiss_error(42) == ["确定\n" + ERROR_TEXT]
-    assert api.user.posted == [(api.user.dialog, 0x0111, 1, api.user.button)]
-    assert api.dialogs == ["确定\n" + ERROR_TEXT]
+@pytest.mark.parametrize("control_id", (1, 2, 100, 0xffff))
+def test_acknowledgment_discovers_real_id_and_owned_visible_dialog(dialog_harness, control_id):
+    api = dialog_harness(control_id=control_id)
+    assert api.dismiss_error(42) == [ERROR_TEXT + "\n确定"]
+    assert api.user.posted == [(api.user.dialog, 0x0111, control_id, api.user.button)]
+    assert api.dialogs == [ERROR_TEXT + "\n确定"]
+    observation = api.dialog_observations[0]
+    assert observation["controls"] == [{"hwnd": hwnd, **control} for hwnd, control in api.user.controls.items()]
+    assert observation["acknowledgment"] == {"parent_hwnd": api.user.dialog,
+        "control_id": control_id, "button_hwnd": api.user.button, "posted": True}
     # Posting is asynchronous: a still-enumerated window must not be posted again
     # or inspected while its first acknowledgment destroys its controls.
     assert api.dismiss_error(42) == []
     assert len(api.user.posted) == 1
+    assert len(api.dialog_observations) == 1
 
 
 def test_missing_ok_control_fails_without_posting(dialog_harness):
     api = dialog_harness(button=False)
-    with pytest.raises(AssertionError, match="error dialog has no OK control"):
+    with pytest.raises(AssertionError, match="expected one visible enabled native button"):
         api.dismiss_error(42)
     assert api.user.posted == []
     assert api.dialogs == []
+    assert api.dialog_observations[0]["controls"][0]["title"] == ERROR_TEXT
+
+
+def test_nested_button_notifies_its_actual_owned_parent(dialog_harness):
+    api = dialog_harness(control_id=2)
+    container = 0x123400000003
+    api.user.controls[container] = {"class": "Pane", "control_id": 100, "parent_hwnd": api.user.dialog,
+                                  "pid": 42, "title": "", "visible": True, "enabled": True}
+    api.user.controls[api.user.button]["parent_hwnd"] = container
+    api.dismiss_error(42)
+    assert api.user.posted == [(container, 0x0111, 2, api.user.button)]
+
+
+def test_ambiguous_buttons_fail_without_guessing(dialog_harness):
+    api = dialog_harness()
+    api.user.controls[22] = dict(api.user.controls[api.user.button], control_id=1, title="OK")
+    with pytest.raises(AssertionError, match="expected one visible enabled native button"):
+        api.dismiss_error(42)
+    assert api.user.posted == []
+    assert len(api.dialog_observations[0]["controls"]) == 3
+
+
+@pytest.mark.parametrize("state", ({"visible": False}, {"enabled": False}, {"class": "Static"}))
+def test_button_caption_alone_does_not_authorize_acknowledgment(dialog_harness, state):
+    api = dialog_harness()
+    api.user.controls[api.user.button].update(title="OK", **state)
+    with pytest.raises(AssertionError, match="expected one visible enabled native button"):
+        api.dismiss_error(42)
+    assert api.user.posted == []
+
+
+@pytest.mark.parametrize("control_id", (0, -1, 0x10000))
+def test_invalid_command_id_is_reported_without_posting(dialog_harness, control_id):
+    api = dialog_harness(control_id=control_id)
+    with pytest.raises(AssertionError, match="has no valid command ID"):
+        api.dismiss_error(42)
+    assert api.user.posted == []
+
+
+@pytest.mark.parametrize("changes, expected", [
+    ({"pid": 99}, "belongs to another process"),
+    ({"parent_hwnd": 99}, "outside its owned subtree"),
+    ({"parent_hwnd": None}, "outside its owned subtree"),
+    ({"parent_hwnd": DialogAPI.button}, "outside its owned subtree"),
+])
+def test_button_and_parent_must_remain_owned(dialog_harness, changes, expected):
+    api = dialog_harness()
+    api.user.controls[api.user.button].update(changes)
+    with pytest.raises(AssertionError, match=expected):
+        api.dismiss_error(42)
+    assert api.user.posted == []
 
 
 def test_failed_acknowledgment_is_not_recorded_as_success(dialog_harness):
@@ -113,12 +188,37 @@ def test_failed_acknowledgment_is_not_recorded_as_success(dialog_harness):
         api.dismiss_error(42)
     assert api.dialogs == []
     assert api.acknowledged_dialogs == set()
+    assert api.dialog_observations[0]["acknowledgment"]["posted"] is False
 
 
 def test_failed_window_enumeration_is_reported(dialog_harness):
     api = dialog_harness(enumerate=False)
     with pytest.raises(AssertionError, match="Could not enumerate launcher error dialogs: 5"):
         api.dismiss_error(42)
+
+
+def test_native_report_keeps_control_diagnostics_when_case_fails(monkeypatch, tmp_path):
+    api = SimpleNamespace(dialog_observations=[], verify_resources=lambda _: {})
+    details = {"pid": 42, "hwnd": 123, "controls": [{"class": "Button", "control_id": 2,
+               "parent_hwnd": 123, "hwnd": 456, "pid": 42, "visible": True, "enabled": True, "title": "确定"}]}
+
+    def fail_fixture(*_):
+        api.dialog_observations.append(details)
+        raise AssertionError("Native dialog probe failed")
+
+    monkeypatch.setattr(launcher, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(launcher, "Windows", lambda: api)
+    monkeypatch.setattr(launcher, "Fixture", fail_fixture)
+    executable = tmp_path / "Luma.exe"
+    executable.write_bytes(b"test-only placeholder")
+    report_path = tmp_path / "reports" / "launcher.json"
+    args = SimpleNamespace(launcher=executable, fixture=executable, report=report_path)
+    with pytest.raises(AssertionError, match="Native dialog probe failed"):
+        launcher.run(args)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    assert report["checks"] == []
+    assert report["dialog_observations"] == [details]
 
 
 class FakeProcess:

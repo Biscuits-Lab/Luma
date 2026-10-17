@@ -55,13 +55,18 @@ def test_native_installer_preflight_runs_before_expensive_build_and_cannot_be_ig
 def test_only_primary_validation_runs_automatically_on_main():
     source = WORKFLOW.read_text(encoding='utf-8')
     triggers = source.split('permissions:', 1)[0]
-    assert triggers.split('on:\n', 1)[1].strip() == 'push:\n    branches: [main]\n  workflow_dispatch:'
+    publication_paths = ['.github/workflows/publish-verified-014.yml', 'scripts/publish_verified_014.py', 'scripts/test_publish_verified_014.py']
+    excluded = ''.join(f"      - '{path}'\n" for path in publication_paths)
+    assert triggers.split('on:\n', 1)[1].strip() == ('push:\n    branches: [main]\n    paths-ignore:\n' + excluded + '  workflow_dispatch:')
     assert 'feature/exr-performance' not in source
     others = [path for path in WORKFLOW.parent.glob('*.yml') if path != WORKFLOW]
-    assert len(others) == 3
+    assert len(others) in (3, 4)
     for path in others:
         triggers = path.read_text(encoding='utf-8').split('permissions:', 1)[0]
-        assert triggers.split('on:\n', 1)[1].strip() == 'workflow_dispatch:', path
+        expected = 'workflow_dispatch:'
+        if path.name == 'publish-verified-014.yml':
+            expected = 'push:\n    branches: [main]\n    paths:\n' + excluded + '  workflow_dispatch:'
+        assert triggers.split('on:\n', 1)[1].strip() == expected, path
 
 
 def test_actual_launcher_preflight_fails_before_full_viewer_build():

@@ -3,6 +3,10 @@ name: Windows viewer, update and installer validation
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '.github/workflows/publish-verified-014.yml'
+      - 'scripts/publish_verified_014.py'
+      - 'scripts/test_publish_verified_014.py'
   workflow_dispatch:
 
 permissions:

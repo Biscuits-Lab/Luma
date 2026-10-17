@@ -76,7 +76,7 @@ class InstallerLanguageTests(unittest.TestCase):
         messages = message_section(self.languages / "LumaMessages.iss", "[CustomMessages]")
         grouped = {lang: {k.split(".", 1)[1]: v for k, v in messages.items() if k.startswith(lang + ".")}
                    for lang in ("en", "zhCN", "zhTW")}
-        self.assertEqual(len(grouped["en"]), 19)
+        self.assertEqual(len(grouped["en"]), 21)
         for lang in ("zhCN", "zhTW"):
             self.assertEqual(set(grouped[lang]), set(grouped["en"]))
             for key, original in grouped["en"].items():

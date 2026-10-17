@@ -44,6 +44,19 @@ def open_combo(qapp, combo):
     return popup
 
 
+def test_popup_filter_ignores_events_after_native_owner_destruction(qapp):
+    from PySide6.QtCore import QEvent
+    from shiboken6 import delete, isValid
+
+    widget = DropdownComboBox()
+    widget.addItem('Image')
+    popup = widget._prepare_popup()
+    decoration = widget._popup_decoration
+    delete(widget)
+    assert not isValid(widget) and not isValid(decoration)
+    assert decoration.eventFilter(popup, QEvent(QEvent.Type.Hide)) is False
+
+
 def assert_alpha_surface(widget, panel):
     image = widget.grab().toImage()
     dpr = image.devicePixelRatio()

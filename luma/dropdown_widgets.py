@@ -7,6 +7,10 @@ All geometry is in logical pixels; only the shadow extends past the panel.
 """
 from __future__ import annotations
 
+import weakref
+
+from shiboken6 import isValid
+
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import (
@@ -131,13 +135,16 @@ class _ComboPopupDecoration(QObject):
     """Paint only the real native popup container; children remain native."""
     def __init__(self, combo, popup):
         super().__init__(combo)
-        self.combo = combo
+        self._combo = weakref.ref(combo)
         self.popup = popup
         popup.installEventFilter(self)
 
     def eventFilter(self, watched, event):
         # Qt can deliver final child teardown events while the Python wrapper
         # is being cleared. Do not dereference a partially destroyed owner.
+        combo = self._combo()
+        if not isValid(self) or combo is None or not isValid(combo) or not isValid(watched):
+            return False
         if watched is getattr(self, 'popup', None):
             if event.type() == QEvent.Type.Paint:
                 painter = QPainter(watched)
@@ -148,11 +155,11 @@ class _ComboPopupDecoration(QObject):
                 path = QPainterPath()
                 path.addRoundedRect(popup_panel_rect(watched), PANEL_RADIUS, PANEL_RADIUS)
                 if not path.contains(event.position()):
-                    self.combo.hidePopup()
+                    combo.hidePopup()
                     return True
             if event.type() == QEvent.Type.Hide:
-                self.combo.update()
-        return super().eventFilter(watched, event)
+                combo.update()
+        return False
 
 
 class DropdownComboBox(QComboBox):

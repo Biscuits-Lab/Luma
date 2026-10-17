@@ -58,9 +58,10 @@ Managed updates select the exact `Luma-<version>-windows-x64-setup.exe` and veri
 ## Current development candidate
 
 `.github/workflows/thumbnail-validation.yml` preserves the Windows validation
-procedure for version 0.1.4. GitHub builds are currently disabled for automatic
-pushes at the owner's request; do not dispatch a workflow without renewed
-permission. Local Linux checks do not replace native Windows acceptance.
+procedure for version 0.1.4. At the owner's request, this primary validation
+workflow runs on pushes to `main` and also supports manual dispatch. Historical
+diagnostic and release-publisher workflows remain manual-only. Local Linux
+checks do not replace native Windows acceptance.
 This validation definition never publishes a release. The exact commit must pass
 viewer/decoder regressions, 200% Qt scaling tests, native bridge tests, packaged
 viewer smoke (including a full 8192-square Unicode EXR), real required-surrogate

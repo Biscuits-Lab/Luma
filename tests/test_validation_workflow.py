@@ -52,16 +52,16 @@ def test_native_installer_preflight_runs_before_expensive_build_and_cannot_be_ig
     assert 'build/installer-preflight/**' in source
 
 
-def test_all_github_workflows_remain_manual_only_after_user_stops_cloud_builds():
+def test_only_primary_validation_runs_automatically_on_main():
     source = WORKFLOW.read_text(encoding='utf-8')
-    assert 'workflow_dispatch:' in source.split('permissions:', 1)[0]
-    assert 'push:' not in source.split('permissions:', 1)[0]
-    assert 'pull_request' not in source.split('permissions:', 1)[0]
+    triggers = source.split('permissions:', 1)[0]
+    assert triggers.split('on:\n', 1)[1].strip() == 'push:\n    branches: [main]\n  workflow_dispatch:'
     assert 'feature/exr-performance' not in source
-    legacy = (WORKFLOW.parent / 'windows-release.yml').read_text(encoding='utf-8')
-    triggers = legacy.split('permissions:', 1)[0]
-    assert 'workflow_dispatch:' in triggers
-    assert 'push:' not in triggers
+    others = [path for path in WORKFLOW.parent.glob('*.yml') if path != WORKFLOW]
+    assert len(others) == 3
+    for path in others:
+        triggers = path.read_text(encoding='utf-8').split('permissions:', 1)[0]
+        assert triggers.split('on:\n', 1)[1].strip() == 'workflow_dispatch:', path
 
 
 def test_actual_launcher_preflight_fails_before_full_viewer_build():

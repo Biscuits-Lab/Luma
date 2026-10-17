@@ -1,0 +1,44 @@
+name: Finish verified Luma 0.1.0 release
+
+on:
+  push:
+    branches: [release/finish-v0.1.0]
+    paths:
+      - .github/workflows/finish-initial-release.yml
+      - scripts/finish_initial_release.py
+      - scripts/test_finish_initial_release.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: luma-initial-v0.1.0-release
+  cancel-in-progress: false
+
+jobs:
+  finish:
+    if: ${{ github.repository == 'Biscuits-Lab/Luma' && !github.event.repository.private && github.ref == 'refs/heads/release/finish-v0.1.0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Test the bounded recovery guards
+        run: python -m unittest discover -s scripts -p test_finish_initial_release.py
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          repository: Biscuits-Lab/Luma
+          run-id: 38835689713
+          artifact-ids: 12019242016
+          path: artifacts
+          merge-multiple: true
+          github-token: ${{ github.token }}
+      - name: Verify exact tested bytes and publish existing draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/finish_initial_release.py --artifacts artifacts

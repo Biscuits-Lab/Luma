@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .toast import CanvasToast
 from .canvas import ImageCanvas
+from .loading import CanvasLoadingIndicator
 from .details_overlay import DetailsOverlay, MetadataTextBrowser, PhotoMetadata
 from .histogram import PreviewHistogram
 from .i18n import tr, error_text, install_qt_translations, verify_packaged_qt_catalogs, localize_buttons
@@ -320,6 +321,7 @@ class ViewerWindow(QMainWindow):
         self._load_token = self._scan_token = self._thumb_token = 0
         self._new_image = True
         self._closing = False
+        self._editor = None
         self.image_linear = False
         self.service = ImageService()
         self.loader = LatestWorker(self.service, self, idle_handler=self.service.prefetch)
@@ -334,6 +336,7 @@ class ViewerWindow(QMainWindow):
         self.thumbnails.completed.connect(self._thumbs_ready)
         self._build_ui()
         self.toast = CanvasToast(self.stack)
+        self.loading_indicator = CanvasLoadingIndicator(self.stack)
         self._error_dialog = None
         self.canvas.fitAnimationChanged.connect(self._suspend_display_extras)
         self.chrome = WindowChrome(self)
@@ -356,7 +359,7 @@ class ViewerWindow(QMainWindow):
         self._pending_render = False
         self.busy_timer = QTimer(self)
         self.busy_timer.setSingleShot(True)
-        self.busy_timer.setInterval(150)
+        self.busy_timer.setInterval(CanvasLoadingIndicator.SHOW_DELAY_MS)
         self.busy_timer.timeout.connect(self._show_loading_indicator)
         self._set_controls(False)
         self._metadata_status('')
@@ -470,26 +473,19 @@ class ViewerWindow(QMainWindow):
         welcome_layout.setSpacing(15)
         logo = QLabel()
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setPixmap(QPixmap(str(ASSETS / 'icon.png')).scaled(88, 88, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        logo.setPixmap(QPixmap(str(ASSETS / 'welcome-icon.png')).scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         welcome_layout.addWidget(logo)
-        title = QLabel(tr('Room for the image'))
-        title.setStyleSheet('font-size: 27px; font-weight: 400; color: #eeeeee;')
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        welcome_layout.addWidget(title)
         subtitle = QLabel(tr('Drop an image or a folder to begin'))
         subtitle.setObjectName('muted')
+        subtitle.setStyleSheet('font-size: 16px;')
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         welcome_layout.addWidget(subtitle)
         open_btn = button(tr('Open an image'), self.choose_file)
         open_btn.setObjectName('primary')
         welcome_layout.addWidget(open_btn, 0, Qt.AlignmentFlag.AlignCenter)
-        formats = QLabel('JPG  ·  PNG  ·  WEBP  ·  TIFF  ·  RAW  ·  EXR  ·  HDR')
-        formats.setObjectName('muted')
-        formats.setStyleSheet('font-size: 10px; margin-top: 15px;')
-        formats.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        welcome_layout.addWidget(formats)
         self.stack.addWidget(self.welcome)
         self.stack.addWidget(self.canvas)
+        self.stack.currentChanged.connect(self._sync_image_chrome)
         middle.addWidget(self.stack, 1)
         self.sidebar = DetailsOverlay(self.canvas, self.centralWidget())
         side = self.sidebar.content_layout
@@ -655,6 +651,7 @@ class ViewerWindow(QMainWindow):
         self.info_button.setIconSize(QSize(20, 20))
         layout.addWidget(bar)
         self.statusBar().hide()
+        self._sync_image_chrome()
 
     def _build_image_context_menu(self):
         self.image_context_menu = ImageContextMenu(self)
@@ -804,10 +801,11 @@ class ViewerWindow(QMainWindow):
         self.filename.setToolTip(str(path))
         self.dimension_label.setText(tr('Loading…'))
         self.histogram.clear('loading')
-        self._status(tr('Loading {name}…', name=path.name or str(path)))
 
     def open_path(self, path: Path):
         if self._closing:
+            return
+        if not self._leave_editor():
             return
         path = Path(path).expanduser().absolute()
         if not path.exists():
@@ -849,6 +847,7 @@ class ViewerWindow(QMainWindow):
             self.details.clear()
             self._metadata_status('')
             self.filename.setText(tr('Opening folder…'))
+            self.loading_indicator.begin(('scan', self._scan_token))
             self._status(tr('Looking for images…'))
             self.cancel_button.show()
 
@@ -858,6 +857,7 @@ class ViewerWindow(QMainWindow):
         directory, files, selected = result
         self.files = files
         if not files:
+            self.loading_indicator.finish(('scan', token))
             self.cancel_button.hide()
             if selected is None:
                 self.stack.setCurrentWidget(self.welcome)
@@ -878,6 +878,7 @@ class ViewerWindow(QMainWindow):
     def _scan_failed(self, token, message):
         if token != self._scan_token or self._closing:
             return
+        self.loading_indicator.finish(('scan', token))
         self.cancel_button.hide()
         if self.path is None:
             self.stack.setCurrentWidget(self.welcome)
@@ -885,6 +886,8 @@ class ViewerWindow(QMainWindow):
 
     def select_index(self, index):
         if not self.files or index < 0 or index >= len(self.files):
+            return
+        if not self._leave_editor():
             return
         if self.index >= 0 and index != self.index:
             self._navigation_direction = 1 if index > self.index else -1
@@ -935,6 +938,8 @@ class ViewerWindow(QMainWindow):
         self._request_render()
 
     def _request_render(self, preview=False):
+        if self._editor is not None:
+            return
         self.image_context_menu.close()
         self._image_context_source = None
         if self.path is None or self._closing:
@@ -946,6 +951,8 @@ class ViewerWindow(QMainWindow):
             self.busy_timer.start()
         self._load_token = self.loader.submit((self.path, self.exposure.value() / 10,
             self.channel.currentText(), self.tone.currentData(), preview))
+        if self._new_image:
+            self.loading_indicator.begin(self._load_token)
 
     def _request_preview(self):
         self._request_render(preview=self.image_linear and not self._new_image)
@@ -969,9 +976,10 @@ class ViewerWindow(QMainWindow):
     def _show_loading_indicator(self):
         if self._pending_render and self.path is not None and not self._closing:
             self.cancel_button.show()
-            self._status(tr('Loading {name}…', name=self.path.name))
 
     def _schedule_render(self):
+        if self._editor is not None:
+            return
         if hasattr(self, 'render_timer') and self.path is not None:
             # Invalidate in-flight full renders immediately, before debounce.
             # One preview timer and LatestWorker's single pending slot bound work.
@@ -1004,6 +1012,8 @@ class ViewerWindow(QMainWindow):
             rh, rw = rgba.shape[:2]
             image = QImage(rgba.data, rw, rh, rgba.strides[0], QImage.Format.Format_RGBA8888).copy()
         self.canvas.set_image(image, reset=self._new_image, source_size=(w, h))
+        if not preview:
+            self.loading_indicator.finish(token)
         if preview:
             # Keep metadata, dimensions, thumbnails, histogram and frosted glass
             # out of the drag hot path. Save/Copy require the exact final frame.
@@ -1054,6 +1064,7 @@ class ViewerWindow(QMainWindow):
     def _load_failed(self, token, message):
         if token != self._load_token or self._closing:
             return
+        self.loading_indicator.finish(token)
         if (self._pending_render and self._last_exact_image is not None
                 and self.displayed_path == self.path):
             self.cancel_load(silent=True)
@@ -1080,7 +1091,21 @@ class ViewerWindow(QMainWindow):
         self._persistent_error(error_text('Could not open {name}.', message,
                                 name=self.path.name if self.path else tr('image')))
 
+    def _set_image_chrome_visible(self, visible):
+        """Image-only actions and the view bar stay out of the empty welcome page."""
+        for control in (self.rotate_button, self.edit_button,
+                        self.delete_button, self.more_button):
+            control.setVisible(visible)
+        self.viewbar.setVisible(visible)
+
+    def _sync_image_chrome(self, *_):
+        self._set_image_chrome_visible(self.stack.currentWidget() is not self.welcome)
+
     def _set_controls(self, enabled, linear=False, preserve_zoom=False):
+        if enabled:
+            # A ready image always restores its actions and view bar, even when a
+            # caller bypasses the stacked welcome page.
+            self._set_image_chrome_visible(True)
         if not enabled:
             self.image_context_menu.close()
             self._image_context_source = None
@@ -1197,12 +1222,19 @@ class ViewerWindow(QMainWindow):
         self.showNormal() if self.isFullScreen() else self.showFullScreen()
 
     def escape(self):
+        if self._editor is not None:
+            self._editor.reject()
+            return
         if self.isFullScreen():
             self.showNormal()
         else:
             self.cancel_load()
 
     def cancel_load(self, silent=False):
+        if self._editor is not None:
+            self._editor.reject()
+            return
+        self.loading_indicator.cancel()
         was_pending = self._pending_render
         self._pending_render = False
         self.canvas.cancel_fit_animation()
@@ -1268,19 +1300,76 @@ class ViewerWindow(QMainWindow):
             self._status(tr('Display rotated 90°  ·  Original unchanged; use Save As to export'))
 
     def edit_image(self):
-        if (self.displayed_path != self.path or self.path is None
+        if (self._editor is not None or self.displayed_path != self.path or self.path is None
                 or self._pending_render or self._display_is_preview):
             return
         from .editor import ImageEditorDialog
         try:
-            editor = ImageEditorDialog(self.canvas.displayed_image(), self.path, self,
-                                       display_referred=self.image_linear)
+            editor = ImageEditorDialog(self.canvas.displayed_image(detach=False), self.path, self.stack,
+                                       display_referred=self.image_linear, embedded=True)
         except (ValueError, OSError, MemoryError) as error:
             self._persistent_error(str(error))
             return
         editor.exported.connect(lambda path: self._status(
             tr('Saved displayed image to {name}  ·  Original unchanged', name=Path(path).name)))
-        editor.exec()
+        self._editor = editor
+        inverse, _ = self.canvas.viewportTransform().inverted()
+        self._editor_view = (self.canvas.transform(), inverse.map(QPointF(
+            self.canvas.viewport().width()/2, self.canvas.viewport().height()/2)),
+            self.canvas.fitted, self.canvas._actual_pixels, self.sidebar.isVisible())
+        self._editor_shortcuts = [(shortcut, shortcut.isEnabled()) for shortcut in self.shortcuts]
+        for shortcut, _ in self._editor_shortcuts:
+            shortcut.setEnabled(False)
+        for timer in (self.prefetch_timer, self.render_timer, self.preview_timer, self.busy_timer):
+            timer.stop()
+        for worker in (self.loader, self.scanner, self.thumbnails):
+            worker.cancel()
+        self._load_token = self._scan_token = self._thumb_token = -1
+        self.loading_indicator.cancel()
+        self.sidebar.hide()
+        self._set_controls(False)
+        self.viewbar.setEnabled(False)
+        self.previous.setEnabled(False)
+        self.next.setEnabled(False)
+        self.filmstrip.setEnabled(False)
+        self.stack.addWidget(editor)
+        editor.finished.connect(lambda result, current=editor: self._editor_finished(current))
+        self.stack.setCurrentWidget(editor)
+        editor.setFocus()
+
+    def _leave_editor(self):
+        if self._editor is not None:
+            self._editor.reject()
+        return self._editor is None
+
+    def _editor_finished(self, editor):
+        if self._editor is not editor:
+            return
+        self._editor = None
+        self.stack.setCurrentWidget(self.canvas)
+        self.stack.removeWidget(editor)
+        editor.deleteLater()
+        transform, center, fitted, actual, sidebar_visible = self._editor_view
+        self.sidebar.setVisible(sidebar_visible)
+        self.centralWidget().layout().activate()
+        if fitted:
+            self.canvas.fit()
+        else:
+            self.canvas.fitted = False
+            self.canvas._actual_pixels = actual
+            self.canvas._fit_scale = self.canvas._fitted_scale()
+            self.canvas._relative_zoom = transform.m11() / self.canvas._fit_scale
+            self.canvas.setTransform(transform)
+            self.canvas.centerOn(center)
+            self.canvas._changed()
+        self.viewbar.setEnabled(True)
+        self.filmstrip.setEnabled(True)
+        self._set_controls(True, self.image_linear)
+        self._update_navigation()
+        for shortcut, enabled in self._editor_shortcuts:
+            shortcut.setEnabled(enabled)
+        self._suspend_display_extras(False)
+        self.canvas.setFocus()
 
     def copy_image(self):
         if (self.displayed_path != self.path or self.path is None
@@ -1337,7 +1426,12 @@ class ViewerWindow(QMainWindow):
                                 tr('Ctrl+S   Save displayed image as…\nCtrl+C   Copy displayed image\nR   Rotate display clockwise\nDelete   Confirm recycle-bin deletion\nCtrl+O   Open image\nCtrl+Shift+O   Open folder\nLeft / Right   Previous / next\nHome / End   First / last\nF   Fit to window\n1   Actual pixels\n+ / − / mouse wheel   Zoom\nDrag   Pan\nDouble-click   Fit / actual pixels\nI   Toggle information\nT   Toggle thumbnails\nF11   Full screen\nEsc   Leave full screen / cancel pending work\nCtrl+0   Reset display\nCtrl+Q   Quit\n\nLuma {version}\nDisplay changes preserve originals. HDR display/export is tone-mapped SDR.', version=__version__))
 
     def closeEvent(self, event):
+        if not self._leave_editor():
+            event.ignore()
+            return
         self._closing = True
+        self.loading_indicator.cancel()
+        self.canvas.release_resources()
         self.toast.dismiss()
         if self._error_dialog is not None:
             self._error_dialog.close()

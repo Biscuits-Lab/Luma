@@ -15,7 +15,15 @@ The full bundle is `dist\Luma`; the executable is `dist\Luma\Luma.exe`. `_intern
 
 ## Source preview
 
-Double-click `预览.bat` or run `scripts/preview.ps1`. The preview script creates `.venv`, installs pinned dependencies only when requirements change, and starts `python -m luma`. You may supply an image or directory path. The first setup needs network access. Both batch launchers keep errors visible; neither needs administrator rights.
+Double-click `预览.bat` or run `scripts/preview.ps1`. The preview script creates `.venv`, installs pinned dependencies when requirements change or import validation fails, and starts `python -m luma`. You may supply an image or directory path. The first setup needs network access. Both batch launchers keep errors visible; neither needs administrator rights.
+
+The preview launcher first reuses a compatible project `.venv`, `.venv-preview`,
+or `.venv-build`, then discovers installed 64-bit Python >=3.12 using the Python
+launcher and PATH. It validates all pinned runtime imports before launching.
+An unusable existing `.venv` is preserved; setup can use `.venv-preview` instead.
+`powershell -NoProfile -File scripts/preview.ps1 -CheckOnly` prepares/checks the
+project environment and exits without opening a GUI. It never installs a system
+Python or opens the Store. Python 3.12 remains the packaging baseline.
 
 ## Linux development smoke
 

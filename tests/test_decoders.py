@@ -325,6 +325,47 @@ def test_pillow_size_checked_before_load(tmp_path, monkeypatch):
         d.decode_image(path)
 
 
+@pytest.mark.parametrize('suffix', ['.jpg', '.png'])
+def test_large_jpeg_uses_detected_format_and_preserves_full_pixels(tmp_path, monkeypatch, suffix):
+    # Scale resource limits down so routine regression tests allocate tiny images.
+    monkeypatch.setattr(d, 'MAX_PIXELS', 100)
+    monkeypatch.setattr(d, 'MAX_JPEG_PIXELS', 500)
+    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', 250)
+    path = tmp_path / ('photo' + suffix)
+    Image.new('RGB', (20, 20), (90, 120, 150)).save(path, format='JPEG', progressive=True)
+    original = path.read_bytes()
+    decoded = d.decode_image(path)
+    assert (decoded.width, decoded.height) == (20, 20)
+    assert decoded.metadata['Format'] == 'JPEG'
+    assert decoded.pixels.dtype == np.uint8 and decoded.nbytes == 1600
+    # The local Pillow warning filter must not leak into other readers.
+    with pytest.warns(Image.DecompressionBombWarning):
+        with Image.open(path) as reference:
+            np.testing.assert_array_equal(decoded.pixels, np.array(reference.convert('RGBA')))
+    assert path.read_bytes() == original
+
+
+def test_png_with_jpeg_extension_keeps_general_pixel_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(d, 'MAX_PIXELS', 100)
+    path = tmp_path / 'not-really-a-jpeg.jpg'
+    Image.new('RGB', (20, 20)).save(path, format='PNG')
+    with patch.object(Image.Image, 'load', side_effect=AssertionError('must check before allocation')):
+        with pytest.raises(d.ImageTooLargeError):
+            d.decode_image(path)
+
+
+@pytest.mark.parametrize('limit,value', [('MAX_JPEG_PIXELS', 399),
+                                       ('MAX_DIMENSION', 19),
+                                       ('MAX_DECODE_BYTES', 1599)])
+def test_jpeg_resource_limits_checked_before_load(tmp_path, monkeypatch, limit, value):
+    path = tmp_path / 'over-limit.jpg'
+    Image.new('RGB', (20, 20)).save(path)
+    monkeypatch.setattr(d, limit, value)
+    with patch.object(Image.Image, 'load', side_effect=AssertionError('must check before allocation')):
+        with pytest.raises(d.ImageTooLargeError):
+            d.decode_image(path)
+
+
 def test_file_size_limit(tmp_path, monkeypatch):
     path = tmp_path / 'size.png'
     path.write_bytes(b'0123456789')

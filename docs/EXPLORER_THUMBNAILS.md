@@ -103,7 +103,8 @@ matters. Do not claim otherwise.
 - RAW thumbnails prefer embedded JPEG/bitmap previews for speed. A missing preview
   may use bounded half-size LibRaw processing. The main viewer still develops RAW
   rather than substituting an embedded preview
-- Thumbnail source limits: raster/sensor up to 64 MP; other full-float paths
+- Thumbnail source limits: ordinary raster up to 67,108,864 pixels (8192 square),
+  JPEG up to 128 MP, RAW sensor up to 64 MP; other full-float paths
   up to 16 MP; bounded Radiance HDR preview up to 256 MP; bounded flat EXR
   preview up to 268,435,456 pixels (16,384 squared). Every source axis
   is limited to 32,768 pixels. HDR/EXR thumbnails can exceed their interactive full-image pixel
@@ -113,6 +114,15 @@ matters. Do not claim otherwise.
   apply. A flat 16K HDR larger than 256 MiB remains unsupported; a compact
   16,384 × 8,192 RLE HDR can produce a bounded preview. Actual success also
   depends on compression, machine performance and camera model
+- Raster memory is checked before metadata calls that may load pixels. JPEG
+  uses native reduced decoding before loading; progressive DCT coefficients are
+  separately estimated, including 4:4:4 files. Raster decoded buffers are bounded
+  to 256 MiB and progressive JPEG coefficients plus decoded pixels to 640 MiB.
+  These allowances do not relax the native 768-MiB/ten-second/single-process job.
+  The private helper bounds BLAS/OpenMP thread pools in its own process before
+  NumPy import; it does not change the user's system environment.
+- The in-app filmstrip shares the bounded raster decoder and no longer skips
+  every image above 32 MP. Its existing output and cache budgets remain bounded.
 - Unsupported variants or any failed limit return no thumbnail. Explorer can
   display the file icon. Do not hang or crash Explorer to force a preview
 

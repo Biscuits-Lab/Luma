@@ -97,7 +97,10 @@ zhTW.DialogFontSize=18
 Name: "desktopicon"; Description: "{cm:DesktopShortcut}"; GroupDescription: "{cm:ShortcutsGroup}"; Flags: unchecked
 
 [Files]
-Source: "..\..\luma\assets\icon.png"; DestName: "luma-setup-icon.png"; Flags: dontcopy
+Source: "..\..\luma\assets\welcome-icon.png"; DestName: "luma-setup-icon.png"; Flags: dontcopy
+Source: "..\..\luma\assets\setup-folder.png"; DestName: "luma-setup-folder.png"; Flags: dontcopy
+Source: "..\..\luma\assets\setup-minimize.png"; DestName: "luma-setup-minimize.png"; Flags: dontcopy
+Source: "..\..\luma\assets\setup-close.png"; DestName: "luma-setup-close.png"; Flags: dontcopy
 Source: "{#BundleDir}\*"; DestDir: "{app}\versions\{#PayloadId}"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist
 Source: "{#MetadataFile}"; DestDir: "{app}\versions\{#PayloadId}"; DestName: "luma-install.json"; Flags: ignoreversion onlyifdoesntexist
 ; Protocol-v1 launcher is immutable across payload upgrades and may be running.

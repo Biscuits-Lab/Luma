@@ -1,7 +1,7 @@
 """Four-tab offline editor for an immutable, already-rendered viewer image.
 
-Integration: ImageEditorDialog(canvas.displayed_image(), path, parent,
-                               display_referred=image_linear).exec()
+Integration: the viewer embeds ImageEditorDialog(..., embedded=True) as an image
+area page and restores viewing on its finished signal. No editor exec() is used.
 Connect exported(str) to show a status message. The viewer image is unchanged.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from PySide6.QtGui import QColor, QImage, QPixmap, QPainter, QPen, QBrush, QKeyS
 from PySide6.QtWidgets import (
     QDialog, QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout,
     QLabel, QSlider, QScrollArea, QStackedWidget, QButtonGroup,
-    QSizePolicy, QToolButton, QFrame,
+    QSizePolicy, QToolButton, QFrame, QLayout,
 )
 
 from .editor_core import (
@@ -405,16 +405,28 @@ class StraightenSlider(QSlider):
 class ImageEditorDialog(QDialog):
     exported = Signal(str)
 
-    def __init__(self, source_image: QImage, source_path: Path, parent=None, *, display_referred=False):
+    def __init__(self, source_image: QImage, source_path: Path, parent=None, *, display_referred=False, embedded=False):
         super().__init__(parent)
+        self.embedded = embedded
+        if embedded:
+            self.setWindowFlags(Qt.WindowType.Widget)
+            self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         if source_image.isNull():
             raise ValueError('There is no displayed image to edit.')
-        from .actions import _display_pixels, _HDR_EXTENSIONS
-        from .decoders import _check_size, MAX_EXR_PIXELS
-        _check_size(source_image.width(), source_image.height(), 4, pixel_limit=MAX_EXR_PIXELS)
+        from .actions import _HDR_EXTENSIONS
+        from .editor_core import check_editor_size
+        check_editor_size(source_image.width(), source_image.height())
         self.source_path = Path(source_path)
         self.display_referred = display_referred or self.source_path.suffix.lower() in _HDR_EXTENSIONS
-        self._source = _display_pixels(source_image)
+        # Convert bounded strips instead of allocating a full converted QImage,
+        # a full Python bytes object, and a Pillow copy at the same time.
+        from PIL import Image
+        self._source = Image.new('RGBA', (source_image.width(), source_image.height()))
+        for top in range(0, source_image.height(), 128):
+            band = source_image.copy(0, top, source_image.width(), min(128, source_image.height()-top)).convertToFormat(QImage.Format.Format_RGBA8888)
+            tile = Image.frombytes('RGBA', (band.width(), band.height()), bytes(band.constBits()),
+                                   'raw', 'RGBA', band.bytesPerLine(), 1)
+            self._source.paste(tile, (0, top))
         self.history = EditHistory()
         self._draft = self.history.state
         self._saved_state = self.history.state
@@ -425,9 +437,10 @@ class ImageEditorDialog(QDialog):
         self._filter_thumbnails_ready = False
         self.setObjectName('imageEditor')
         self.setWindowTitle(f'{et("Edit image")} · {self.source_path.name}')
-        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
-        self.resize(1280, 860)
-        self.setMinimumSize(900, 620)
+        if not embedded:
+            self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+            self.resize(1280, 860)
+            self.setMinimumSize(900, 620)
         self.setStyleSheet(STYLE)
         self._renderer = EditorRenderer(self._source, self)
         self._renderer.finished.connect(self._rendered)
@@ -436,6 +449,8 @@ class ImageEditorDialog(QDialog):
         self._preview_timer.setInterval(80)
         self._preview_timer.timeout.connect(self._request_preview)
         self._build_ui()
+        if embedded:
+            self.layout().setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         self._connect_shortcuts()
         self.canvas.set_image(source_image.scaled(1600, 1000, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         self._sync()
@@ -704,6 +719,9 @@ class ImageEditorDialog(QDialog):
                                    ('Ctrl+Shift+S', self._save_as), ('Ctrl+0', self.canvas.fit)):
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.activated.connect(callback)
+        if self.embedded:
+            QShortcut(QKeySequence('Escape'), self).activated.connect(self.reject)
+            QShortcut(QKeySequence('Ctrl+Q'), self).activated.connect(self.window().close)
 
     def _tab_changed(self, name):
         self.tab_buttons[('Crop', 'Adjust', 'Filters', 'Markup').index(name)].setChecked(True)
@@ -880,6 +898,8 @@ class ImageEditorDialog(QDialog):
                 self._saved_state = self.state
                 self.exported.emit(str(result))
                 self.status.setText(f'{et("Saved")} · {Path(result).name}')
+                if self.embedded:
+                    self.accept()
             return
         if self._requested_state[1] != self.canvas.mode:
             return

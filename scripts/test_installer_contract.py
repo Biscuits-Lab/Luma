@@ -138,7 +138,6 @@ class InstallerLanguageTests(unittest.TestCase):
         self.assertIn("LumaFailureMemo.ScrollBars := ssVertical", ui)
         for control in ("NextButton", "CancelButton", "DirBrowseButton"):
             self.assertNotIn(control + ".OnClick :=", ui)
-        self.assertNotIn("BorderStyle := bsNone", ui)
         self.assertNotIn("SuppressibleMsgBox", ui)
         self.assertIn("LayoutLumaWizard(CurPageID)", script)
         self.assertIn("DisableDirPage=no", script)
@@ -157,9 +156,34 @@ class InstallerLanguageTests(unittest.TestCase):
                           "LumaBrandIcon.BackColor := clNone"):
             self.assertIn(statement, ui)
         self.assertNotIn("LumaBrowseButton.OnClick := WizardForm.DirBrowseButton.OnClick", ui)
-        self.assertIn("ScaleX(38), ScaleY(38)", ui)
-        self.assertIn("LumaBrowseButton.Bitmap.Canvas", ui)
+        self.assertIn("LumaBrowseButton.Parent := LumaDirField", ui)
+        self.assertIn("LumaBrowseButton.SetBounds(LumaDirField.Width - ScaleX(35), ScaleY(3), ScaleX(30), ScaleY(30))", ui)
+        self.assertIn("LumaBrowseButton.Stretch := True", ui)
+        self.assertIn("LumaBrowseButton.PngImage.LoadFromFile", ui)
+        self.assertIn("ExtractTemporaryFile('luma-setup-folder.png')", ui)
+        self.assertNotIn("DrawFolderGlyph", ui)
         self.assertNotIn("LumaBrandIcon.Bitmap.Canvas", ui)
+
+    def test_installation_path_is_one_rounded_field_with_inside_folder_icon(self):
+        ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")
+        for statement in (
+                "LumaDirFrame := TPanel.Create(WizardForm)",
+                "LumaDirFrame.Parent := WizardForm.SelectDirPage",
+                "LumaDirField := TPanel.Create(WizardForm)",
+                "LumaDirField.Parent := LumaDirFrame",
+                "LumaDirFrame.Color := $3D3D3D",
+                "LumaDirField.Color := $2D2D2D",
+                "WizardForm.DirEdit.BorderStyle := bsNone",
+                "WizardForm.DirEdit.Color := $2D2D2D",
+                "LumaDirFrame.SetBounds(0, ScaleY(31), ContentWidth, ScaleY(38))",
+                "WizardForm.DirEdit.SetBounds(ScaleX(12), ScaleY(39), ContentWidth - ScaleX(50), ScaleY(22))",
+                "LumaCreateRoundRectRgn(0, 0, LumaDirFrame.Width + 1, LumaDirFrame.Height + 1",
+                "LumaSetWindowRgn(LumaDirFrame.Handle, Region, True)",
+                "StyleLumaDirectoryField"):
+            self.assertIn(statement, ui)
+        # The separate right-hand button is gone: the icon lives inside the field.
+        self.assertNotIn("ScaleX(38), ScaleY(38)", ui)
+        self.assertIn("LumaBrowseButton.BackColor := clNone", ui)
 
     def test_progress_stays_engine_owned_without_simulated_animation(self):
         ui = (self.root / "packaging/windows/LumaUI.iss").read_text(encoding="utf-8")

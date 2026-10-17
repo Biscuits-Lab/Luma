@@ -7,6 +7,9 @@ import sys
 from PySide6.QtCore import Qt, Signal, QRectF, QEvent, QPointF, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QBrush, QPainter, QPixmap, QImage, QTransform
 from PySide6.QtWidgets import QApplication, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+from shiboken6 import isValid
+
+from .minification import MinificationCache
 
 
 def motion_allowed():
@@ -29,6 +32,51 @@ def motion_allowed():
         return False
 
 
+class FilteredPixmapItem(QGraphicsPixmapItem):
+    """Keep exact source pixels while painting a bounded filtered display level.
+
+    Changing the painted level never changes the item's pixmap, bounds or
+    transform, so copy/save, rotation, panning and actual-pixel zoom still use
+    the original full-quality frame.
+    """
+
+    def __init__(self, cache):
+        super().__init__()
+        self.cache = cache
+        # QGraphicsPixmapItem.paint overrides the view's render hint. Setting
+        # only QGraphicsView.SmoothPixmapTransform leaves the item unsmoothed.
+        self.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        cache.changed.connect(self._update_if_alive)
+
+    def _update_if_alive(self):
+        # Graphics items are not QObjects: a bare native update callback does
+        # not get QObject's receiver-destruction disconnect protection.
+        if isValid(self):
+            self.update()
+
+    def setPixmap(self, pixmap):
+        super().setPixmap(pixmap)
+        self.cache.set_source(pixmap.toImage())
+
+    def paint(self, painter, option, widget=None):
+        pixmap = self.pixmap()
+        if pixmap.isNull():
+            return
+        # deviceTransform includes both the view/item transforms and the actual
+        # output device DPR. The pixmap's DPR maps its pixels to item units.
+        transform = painter.deviceTransform()
+        scale = max(math.hypot(transform.m11(), transform.m12()),
+                    math.hypot(transform.m21(), transform.m22())) / pixmap.devicePixelRatioF()
+        self.cache.request(scale)
+        image = self.cache.choose(scale)
+        if image is None:
+            super().paint(painter, option, widget)
+            return
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawImage(QRectF(self.offset(), pixmap.deviceIndependentSize()), image,
+                          QRectF(0, 0, image.width(), image.height()))
+
+
 class ImageCanvas(QGraphicsView):
     # Percentages are relative to the current fit-to-window scale, not pixels.
     zoomChanged = Signal(float)
@@ -41,7 +89,8 @@ class ImageCanvas(QGraphicsView):
         # File drops belong to the window; keep the scene from claiming them.
         self.setAcceptDrops(False)
         self.setScene(QGraphicsScene(self))
-        self.item = QGraphicsPixmapItem()
+        self.minification = MinificationCache(self)
+        self.item = FilteredPixmapItem(self.minification)
         self.scene().addItem(self.item)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -196,11 +245,11 @@ class ImageCanvas(QGraphicsView):
         self.scene().setSceneRect(self.item.sceneBoundingRect())
         self.fit()
 
-    def displayed_image(self):
+    def displayed_image(self, *, detach=True):
         image = self.item.pixmap().toImage()
         if self.item.rotation():
             image = image.transformed(QTransform().rotate(self.item.rotation()))
-        return image.copy()
+        return image.copy() if detach else image
 
     def actual_size(self):
         self.cancel_fit_animation()
@@ -283,6 +332,14 @@ class ImageCanvas(QGraphicsView):
     def hideEvent(self, event):
         self.cancel_fit_animation()
         super().hideEvent(event)
+
+    def release_resources(self):
+        self.cancel_fit_animation()
+        self.minification.close()
+
+    def closeEvent(self, event):
+        self.release_resources()
+        super().closeEvent(event)
 
     def drawBackground(self, painter, rect):
         painter.save()

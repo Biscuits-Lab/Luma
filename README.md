@@ -23,7 +23,8 @@ Opening, browsing and display rotation do not change the original file. Copy/Sav
 
 - 双击 `预览.bat`：首次创建项目内虚拟环境并安装依赖，然后打开 Luma
 - 双击 `打包.bat`：在 Windows 上测试并生成 `dist\Luma\Luma.exe`
-- 首次运行需要安装 64 位 Python 3.12，并联网下载依赖；不会安装到系统目录
+- 首次运行需要已安装的 64 位 Python 3.12 或更新的兼容版本，并联网下载依赖；预览脚本优先复用项目虚拟环境，不会安装系统运行时
+- 只检查运行环境、不打开窗口：`powershell -NoProfile -File .\scripts\preview.ps1 -CheckOnly`
 
 ## 更新与旧版本迁移
 

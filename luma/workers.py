@@ -405,17 +405,13 @@ def thumbnail_batch(paths, cancelled, *, cache=None):
             if cached is not None:
                 result[str(path)] = (cached.size, cached.pixels)
                 continue
-            with Image.open(path) as source:
-                if source.width * source.height > 32_000_000:
-                    continue
-                source.draft('RGB', (160, 110))
-                thumb = ImageOps.exif_transpose(source)
-                thumb.thumbnail((160, 110))
-                rgba = thumb.convert('RGBA')
-                pixels = rgba.tobytes()
-                result[str(path)] = (rgba.size, pixels)
-                if cache is not None and not cancelled():
-                    cache.put(key, ThumbnailData(rgba.size, pixels))
+            from .thumbnail_worker import generate_filmstrip_thumbnail
+            rgba = generate_filmstrip_thumbnail(path, 160)
+            rgba.thumbnail((160, 110), Image.Resampling.LANCZOS)
+            pixels = rgba.tobytes()
+            result[str(path)] = (rgba.size, pixels)
+            if cache is not None and not cancelled():
+                cache.put(key, ThumbnailData(rgba.size, pixels))
         except (OSError, ValueError, Image.DecompressionBombError):
             pass
     return result

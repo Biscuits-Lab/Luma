@@ -9,12 +9,17 @@ from __future__ import annotations
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
+import os
 import struct
 import sys
 import warnings
 
 MAX_FILE_BYTES = 256 * 1024 * 1024
-MAX_RASTER_PIXELS = 64_000_000
+MAX_RASTER_PIXELS = 8192 * 8192
+MAX_JPEG_PIXELS = 128_000_000
+MAX_SENSOR_PIXELS = 64_000_000
+MAX_RASTER_DECODE_BYTES = 256 * 1024 * 1024
+MAX_JPEG_WORKSPACE_BYTES = 640 * 1024 * 1024
 MAX_LINEAR_PIXELS = 16_000_000
 MAX_DIMENSION = 32768
 MAX_EDGE = 1024
@@ -22,17 +27,36 @@ MAGIC = b"LUMATHM1"
 MODES = {"raster": ".png", "hdr": ".hdr", "exr": ".exr", "raw": ".nef"}
 
 
-def _dimensions(width, height, ceiling=MAX_RASTER_PIXELS):
+def _dimensions(width, height, ceiling=MAX_SENSOR_PIXELS):
     if not (0 < width <= MAX_DIMENSION and 0 < height <= MAX_DIMENSION and width * height <= ceiling):
         raise ValueError("Image exceeds Explorer thumbnail limits")
 
 
 def _raster(source, edge, fallback_flip=0):
     from PIL import Image, ImageCms
-    _dimensions(*source.size)
+    original_size = source.size
+    jpeg = source.format == 'JPEG'
+    _dimensions(*original_size, MAX_JPEG_PIXELS if jpeg else MAX_RASTER_PIXELS)
+    source.draft("RGB", (edge, edge))
+    # JPEG's native 1/2, 1/4 or 1/8 decode must happen before loading pixels.
+    # Progressive JPEGs still retain full-size DCT coefficient arrays, including
+    # 4:4:4 photographs; account for those separately inside the 768-MiB job.
+    decoded_bytes = source.width * source.height * 4
+    if decoded_bytes > MAX_RASTER_DECODE_BYTES:
+        raise ValueError('Raster decode exceeds thumbnail memory budget')
+    if jpeg and (source.info.get('progressive') or source.info.get('progression')):
+        layers = source.layer
+        horizontal = max(layer[1] for layer in layers)
+        vertical = max(layer[2] for layer in layers)
+        columns = (original_size[0] + 8 * horizontal - 1) // (8 * horizontal)
+        rows = (original_size[1] + 8 * vertical - 1) // (8 * vertical)
+        coefficients = columns * rows * sum(layer[1] * layer[2] for layer in layers) * 64 * 2
+        if coefficients + decoded_bytes > MAX_JPEG_WORKSPACE_BYTES:
+            raise ValueError('Progressive JPEG exceeds thumbnail workspace budget')
     icc = source.info.get("icc_profile")
     if icc and len(icc) > 4 * 1024 * 1024:
         raise ValueError("ICC profile exceeds thumbnail limit")
+    # PNG getexif() can itself load all pixels: budget checks must precede it.
     try:
         orientation = source.getexif().get(274, 1)
     except (OSError, ValueError, TypeError, SyntaxError):
@@ -46,7 +70,6 @@ def _raster(source, edge, fallback_flip=0):
     if operation is None:
         operation = {3: Image.Transpose.ROTATE_180, 5: Image.Transpose.ROTATE_90,
                      6: Image.Transpose.ROTATE_270}.get(fallback_flip)
-    source.draft("RGB", (edge, edge))
     source.thumbnail((edge, edge), Image.Resampling.LANCZOS, reducing_gap=3.0)
     # Pillow applies TIFF orientation during load; do not transform it twice.
     working = (source.transpose(operation)
@@ -181,7 +204,7 @@ def _content_thumbnail(path, edge):
     return _raw(path, edge)
 
 
-def generate_thumbnail(path, mode, edge):
+def generate_thumbnail(path, mode, edge, *, _pillow_only=False):
     """Return a bounded Pillow RGBA image; no disk writes or Qt initialization."""
     from PIL import Image
     path = Path(path)
@@ -190,18 +213,32 @@ def generate_thumbnail(path, mode, edge):
     if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_FILE_BYTES:
         raise ValueError("Invalid or oversized thumbnail input")
     with warnings.catch_warnings():
-        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        # Local, format-specific header and allocation checks run before load.
+        # Leave Pillow's global threshold and hard decompression error intact.
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
         if mode == "hdr":
             result = _radiance(path, edge)
         elif mode == "exr":
             result = _exr(path, edge)
         elif mode == "raw":
             result = _raw(path, edge)
+        elif _pillow_only:
+            with Image.open(path) as source:
+                result = _raster(source, edge)
         else:
             result = _content_thumbnail(path, edge)
     if result.mode != "RGBA" or not 1 <= result.width <= edge or not 1 <= result.height <= edge:
         raise ValueError("Invalid thumbnail result")
     return result
+
+
+def generate_filmstrip_thumbnail(path, edge):
+    """Pillow-only preview, safe beside the viewer's concurrent full decoder.
+
+    Do not enter the private process's temporary full-float decoder limits or
+    its RAW fallback. The filmstrip retains its previous Pillow raster semantics.
+    """
+    return generate_thumbnail(path, 'raster', edge, _pillow_only=True)
 
 
 def main(argv=None):
@@ -219,6 +256,12 @@ def main(argv=None):
                 or output.is_symlink() or not output.is_file() or output.stat().st_nlink != 1
                 or source.samefile(output)):
             return 2
+        # This private single-process helper does not need BLAS worker pools.
+        # Set only its own environment before NumPy/LibRaw import, avoiding
+        # thread-pool reservations that consume most of the 768-MiB job budget.
+        if 'numpy' not in sys.modules:
+            for name in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS'):
+                os.environ[name] = '1'
         image = generate_thumbnail(source, mode, edge)
         payload = MAGIC + struct.pack("<II", image.width, image.height) + image.tobytes()
         if len(payload) > 16 + MAX_EDGE * MAX_EDGE * 4:

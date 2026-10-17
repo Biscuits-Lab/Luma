@@ -219,6 +219,30 @@ def test_preview_is_bounded():
     assert max(out.size)<=1600 and out.width*out.height<=1_601_000
 
 
+def test_editor_has_separate_bounded_rgba8_source_policy(monkeypatch):
+    from luma import editor_core as core
+    from luma import decoders
+    core.check_editor_size(8736, 11648)
+    with pytest.raises(ValueError):
+        core.check_editor_size(16001, 8000)
+    with pytest.raises(ValueError):
+        core.check_editor_size(32769, 1)
+    with pytest.raises(decoders.ImageTooLargeError):
+        decoders._check_size(8736, 11648, 16, pixel_limit=10**12)
+    monkeypatch.setattr(core, 'MAX_EDITOR_SOURCE_BYTES', 100)
+    with pytest.raises(ValueError):
+        core.check_editor_size(20, 20)
+
+
+def test_editor_render_budget_checked_before_copy(monkeypatch):
+    from luma import editor_core as core
+    source = fixture_image(20, 20)
+    monkeypatch.setattr(core, 'MAX_EDITOR_RENDER_BYTES', 20*20*4*6 - 1)
+    monkeypatch.setattr(source, 'copy', lambda: pytest.fail('must check budget before allocation'))
+    with pytest.raises(ValueError, match='memory budget'):
+        core.render(source, EditState())
+
+
 @pytest.mark.parametrize('state', [EditState(crop=(1,0,0,1)),EditState(straighten=90),EditState(filter_name='ai'),EditState(adjustments=Adjustments(exposure=8))])
 def test_invalid_recipe_rejected(state):
     with pytest.raises(ValueError): render(fixture_image(),state)

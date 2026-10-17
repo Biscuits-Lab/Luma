@@ -149,6 +149,7 @@ class Native:
                  BOOL, DWORD, HANDLE, W.LPCWSTR, C.POINTER(STARTUPINFO), C.POINTER(PROCESS_INFORMATION)]),
             (self.k, "ResumeThread", DWORD, [HANDLE]),
             (self.k, "OpenProcess", HANDLE, [DWORD, BOOL, DWORD]),
+            (self.k, "GetCurrentThreadId", DWORD, []),
             (self.k, "CloseHandle", BOOL, [HANDLE]),
             (self.k, "TerminateProcess", BOOL, [HANDLE, C.c_uint]),
             (self.k, "TerminateJobObject", BOOL, [HANDLE, C.c_uint]),
@@ -168,6 +169,11 @@ class Native:
             (self.u, "GetParent", HANDLE, [HANDLE]),
             (self.u, "GetWindowLongW", LONG, [HANDLE, C.c_int]),
             (self.u, "SetThreadDpiAwarenessContext", HANDLE, [HANDLE]),
+            (self.u, "SetForegroundWindow", BOOL, [HANDLE]),
+            (self.u, "GetForegroundWindow", HANDLE, []),
+            (self.u, "AttachThreadInput", BOOL, [DWORD, DWORD, BOOL]),
+            (self.u, "BringWindowToTop", BOOL, [HANDLE]),
+            (self.u, "SetFocus", HANDLE, [HANDLE]),
             (self.u, "GetDpiForWindow", C.c_uint, [HANDLE]),
             (self.u, "GetDpiForSystem", C.c_uint, []),
             (self.u, "SendMessageTimeoutW", LONG_PTR,
@@ -196,6 +202,32 @@ class Native:
         if not value:
             raise C.WinError(C.get_last_error(), operation)
         return value
+
+    def activate(self, window: int) -> None:
+        """Bring the owned wizard forward before synthetic pointer actions.
+
+        A BM_CLICK posted while another desktop window owns the foreground can
+        invoke the script callback without showing the native folder chooser,
+        which is impossible for a real click on an active wizard.
+        """
+        self.u.SetForegroundWindow(window)
+        if self.u.GetForegroundWindow() == window:
+            return
+        foreground = self.u.GetForegroundWindow()
+        current = self.k.GetCurrentThreadId()
+        pid = DWORD()
+        target = (self.u.GetWindowThreadProcessId(foreground, C.byref(pid))
+                  if foreground else 0)
+        attached = False
+        if target and target != current:
+            attached = bool(self.u.AttachThreadInput(current, target, True))
+        try:
+            self.u.BringWindowToTop(window)
+            self.u.SetForegroundWindow(window)
+            self.u.SetFocus(window)
+        finally:
+            if attached:
+                self.u.AttachThreadInput(current, target, False)
 
     def owned(self, window: int, job: int) -> bool:
         if not self.u.IsWindow(window):
@@ -371,6 +403,11 @@ def browse_and_cancel(api: Native, job: InstallerJob, values: dict, translated: 
     original = api.text(edit)
     if not api.owned(button, job.job) or not api.u.IsChild(window, button):
         raise AssertionError("Folder button is outside the owned wizard")
+    # The native browse callback can be ignored if it is posted before the
+    # configuration page has finished activating; a real pointer click cannot
+    # arrive that early.
+    api.activate(window)
+    time.sleep(1.0)
     api.check(api.u.PostMessageW(button, BM_CLICK, 0, 0), "Activate owned folder button")
     deadline, dialog = time.monotonic() + 10, None
     while time.monotonic() < deadline:
@@ -398,11 +435,11 @@ def browse_and_cancel(api: Native, job: InstallerJob, values: dict, translated: 
 def verify_layout(api: Native, job: InstallerJob, values: dict, translated: dict, desktop_selected=False) -> dict:
     required = {"page", "footer", "button_height", "primary_width", "secondary_width",
                 "scale_x_100", "scale_y_100", "window", "directory", "desktop", "next", "cancel",
-                "browse", "directory_page", "logo_left", "logo_top", "logo_width", "logo_height"}
+                "browse", "directory_page", "field", "logo_left", "logo_top", "logo_width", "logo_height"}
     if not required <= values.keys():
         raise AssertionError("LUMA_UI telemetry is missing fields: " + str(sorted(required - values.keys())))
     window = values["window"]
-    for key in ("window", "directory", "desktop", "next", "cancel", "browse", "directory_page"):
+    for key in ("window", "directory", "desktop", "next", "cancel", "browse", "directory_page", "field"):
         handle = values[key]
         if not api.owned(handle, job.job) or not api.u.IsWindowVisible(handle):
             raise AssertionError(f"{key} is not a visible window owned by the installer job")
@@ -412,21 +449,31 @@ def verify_layout(api: Native, job: InstallerJob, values: dict, translated: dict
     by_handle = {item["hwnd"]: item for item in controls}
     next_button, cancel_button = by_handle[values["next"]], by_handle[values["cancel"]]
     desktop, directory = by_handle[values["desktop"]], by_handle[values["directory"]]
-    browse = by_handle[values["browse"]]
+    browse, field = by_handle[values["browse"]], by_handle[values["field"]]
     if browse["class"] != "TBitmapButton" or not browse["style"] & 0x10000:
         raise AssertionError("Folder icon is not a keyboard-focusable native bitmap button")
     if caption(browse["text"]) != caption(translated["ChangeLocation"]):
         raise AssertionError("Folder icon lost its translated accessible name")
+    if field["class"] != "TPanel":
+        raise AssertionError("Installation path field is not a native rounded panel")
     page_bounds = api.rect(values["directory_page"], client=True)
-    for item in (desktop, directory, browse):
+    for item in (desktop, directory, field):
         if item["parent"] != values["directory_page"] or not contains_rect(page_bounds, item["rect"]):
             raise AssertionError("Configuration control extends beyond its actual notebook page")
+    if not api.u.IsChild(values["field"], browse["hwnd"]):
+        raise AssertionError("Folder icon is not inside the rounded path field")
+    for item in (directory, browse):
+        if not contains_rect(field["rect"], item["rect"]):
+            raise AssertionError("Folder icon or edit control is outside the rounded path field")
     if directory["rect"][2] >= browse["rect"][0]:
         raise AssertionError("Folder button overlaps the editable installation path")
+    field_height = (38 * values["scale_y_100"] + 50) // 100
+    if abs((field["rect"][3] - field["rect"][1]) - field_height) > 1:
+        raise AssertionError("Rounded path field does not scale with native metrics")
     for axis, size in (("x", browse["rect"][2] - browse["rect"][0]),
                        ("y", browse["rect"][3] - browse["rect"][1])):
-        if abs(size - (38 * values[f"scale_{axis}_100"] + 50) // 100) > 1:
-            raise AssertionError("Folder button hit target does not scale with native metrics")
+        if abs(size - (30 * values[f"scale_{axis}_100"] + 50) // 100) > 1:
+            raise AssertionError("Folder icon hit target does not scale with native metrics")
     primary_captions = {caption(translated[key]) for key in ("ButtonInstall", "ButtonNext", "UpdateAction") if key in translated}
     if caption(next_button["text"]) not in primary_captions:
         raise AssertionError("Primary button has the wrong language/caption")
@@ -519,6 +566,7 @@ def run_case(api: Native, installer: Path, language: str, output: Path, work: Pa
     if log.exists():
         log.unlink()  # Test-owned prior report only; logs cannot be mistaken for this run.
     destination.parent.mkdir(parents=True)
+    destination.mkdir(exist_ok=True)
     row = {"language": language, "variant": variant, "passed": False,
            "installer": str(installer), "log": str(log), "screenshot": str(output / f"{name}.png"),
            "scope": "first configuration page only; installation is never started"}
@@ -554,8 +602,8 @@ def run_case(api: Native, installer: Path, language: str, output: Path, work: Pa
         row["cancellation"] = cancel(api, job, window, translated)
         if not row["cancellation"]["confirmed"]:
             raise AssertionError("Native cancellation confirmation was not observed")
-        if destination.exists():
-            raise AssertionError("Configuration-only test unexpectedly created the installation destination")
+        if any(destination.iterdir()):
+            raise AssertionError("Configuration-only test unexpectedly wrote to the installation destination")
         row["passed"] = True
     except Exception as error:
         row["error"] = f"{type(error).__name__}: {error}"

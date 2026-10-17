@@ -28,6 +28,7 @@ from .photo_metadata import extract_exif_metadata, extract_exr_metadata, extract
 # safety bounds, not a promise that every accepted file fits available system RAM.
 MAX_FILE_BYTES = 1024 * 1024 * 1024
 MAX_PIXELS = 64_000_000
+MAX_JPEG_PIXELS = 128_000_000  # Full-resolution 8-bit high-megapixel photographs.
 MAX_DIMENSION = 32768
 MAX_DECODE_BYTES = 1536 * 1024 * 1024
 MAX_HEADER_BYTES = 65536
@@ -118,7 +119,9 @@ class ImageData:
 def _check_size(width: int, height: int, bytes_per_pixel: int = 16, *,
                 pixel_limit: int | None = None) -> None:
     width, height = int(width), int(height)
-    pixel_limit = MAX_PIXELS if pixel_limit is None else min(pixel_limit, MAX_EXR_PIXELS)
+    # The larger photograph allowance is valid only for RGBA8, never float EXR.
+    override_cap = MAX_JPEG_PIXELS if bytes_per_pixel == 4 else MAX_EXR_PIXELS
+    pixel_limit = MAX_PIXELS if pixel_limit is None else min(pixel_limit, override_cap)
     if width <= 0 or height <= 0:
         raise DecodeError(f'Invalid image dimensions: {width} × {height}.')
     if width > MAX_DIMENSION or height > MAX_DIMENSION or width * height > pixel_limit:
@@ -214,13 +217,18 @@ def _decode_pillow(path: Path) -> ImageData:
     # A stream avoids Pillow's filename-mmap path, which uses already-oriented
     # TIFF dimensions as raw storage geometry for mapped grayscale modes.
     with warnings.catch_warnings(), path.open('rb') as stream:
-        warnings.simplefilter('error', Image.DecompressionBombWarning)
+        # Enforce our format-specific dimensions and byte budget before load().
+        # Pillow's generic warning threshold also covers valid 100 MP JPEGs.
+        # Keep its hard bomb error and never change Image.MAX_IMAGE_PIXELS.
+        warnings.simplefilter('ignore', Image.DecompressionBombWarning)
         try:
             source = Image.open(stream)
         except UnidentifiedImageError as exc:
             raise DecodeError('Unrecognized or damaged image data.') from exc
         with source:
-            _check_size(*source.size, 16 if source.mode in ('I', 'F') or source.mode.startswith('I;16') else 4)
+            pixel_limit = MAX_JPEG_PIXELS if source.format == 'JPEG' else None
+            _check_size(*source.size, 16 if source.mode in ('I', 'F') or source.mode.startswith('I;16') else 4,
+                        pixel_limit=pixel_limit)
             metadata = {
                 'Format': str(source.format or path.suffix[1:].upper()),
                 'Decoder': f'Pillow {Image.__version__}',
@@ -277,7 +285,8 @@ def _decode_pillow(path: Path) -> ImageData:
             working = (source.transpose(operation)
                        if operation is not None and source.format != 'TIFF' else source)
             metadata['Orientation'] = f'EXIF {orientation}; applied' if operation is not None else 'As stored'
-            _check_size(*working.size, 16 if working.mode in ('I', 'F') or working.mode.startswith('I;16') else 4)
+            _check_size(*working.size, 16 if working.mode in ('I', 'F') or working.mode.startswith('I;16') else 4,
+                        pixel_limit=pixel_limit)
 
             # Pillow retains high precision for single-channel sources. RGB
             # PNG/TIFF above 8 bits is decoded at 8 bits by Pillow, explicitly
@@ -324,7 +333,7 @@ def _decode_pillow(path: Path) -> ImageData:
                 _add_limitation(metadata, 'Pillow reduces this multichannel source to 8 bits per channel')
             metadata['Decoded depth'] = '8-bit RGBA'
             return ImageData(path, np.array(rgba, dtype=np.uint8), False, metadata,
-                             photo_metadata=photo_metadata)
+                             _pixel_limit=pixel_limit, photo_metadata=photo_metadata)
 
 
 def _read_exact(stream: BinaryIO, count: int) -> bytes:

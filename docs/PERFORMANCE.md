@@ -125,3 +125,104 @@ python scripts/benchmark_thumbnails.py --fixtures ../thumbnail-fixtures --genera
 The benchmark scripts do not evict OS caches and do not claim cold-disk results.
 Full Windows build, native surrogate/installer lifecycle validation, plus manual
 Windows 11 rounding/snap and Explorer visual checks are separate evidence.
+
+## Display minification, local Windows offscreen measurements
+
+On 2026-10-17, Biscuits-Titan / Python 3.13.12 / pinned Qt 6.12.0 ran
+`scripts/benchmark_minification.py` using Qt **offscreen**, with 3840x2160 and
+7680x4320 seeded synthetic noise/checkerboards, plus Matplotlib's unchanged
+512x600 public-domain Grace Hopper photo. This is headless CPU rendering,
+not interactive Windows desktop validation. Private user photographs were not
+exported or used as benchmark output. Fixture creation, reference integration,
+PNG encoding and I/O were excluded from timing. Each paint used three repeats;
+cache construction timings are single cold requests, not a latency guarantee.
+
+The initial cache timings below precede later lifecycle hardening. That hardening
+replaced a QObject worker signal bridge with one GUI-owned 5-ms result timer and
+checks graphics-item validity before updating. The area kernel, level selection
+and byte budget are unchanged; cold-cache delivery latency for the hardened
+version has not been remeasured. Idle caches have no active result timer.
+
+| Measurement | Result |
+|---|---:|
+| 8K noise, 12.5% physical scale, cache ready | 25.9 ms |
+| 8K checkerboard, 12.5% physical scale, cache ready | 27.3 ms |
+| 8K noise, 37% physical scale, cache ready | 18.2 ms |
+| Retained cache, 8K at 12.5% | 41.5 MiB (64 MiB limit) |
+| Warm request/selection, 8K noise at 12.5% | 0.0024 ms |
+| Noise standard deviation, old fast / smooth only / area cache, 12.5% | 23.97 / 12.00 / 3.01 display-code levels |
+| 8K checkerboard RMSE against independent area reference, same methods | 120.30 / 74.94 / 0.50 display-code levels |
+| Public photo RMSE against independent area reference, same methods | 18.38 / 15.07 / 1.18 display-code levels |
+
+DPR 1 and 2 were tested at the same physical scale. Physical 1:1 crops remained
+byte exact across every fixture and both DPRs, even after caching. A burst of 84
+zoom requests followed by source replacement retained only current-image pixels
+(maximum channel error zero). All measured retained caches stayed below 64 MiB.
+The synthetic noise measure is not a denoising claim for natural photographs.
+
+The item explicitly enables smooth transformation by default. Strong reductions
+use lazy, asynchronous area-filtered half-size levels; selection uses the actual
+paint device transform, including display DPI, image DPR and item transforms.
+The original full-resolution pixmap, scene geometry, copy/save data and source
+file remain unchanged. Filtering operates on premultiplied display-code pixels;
+it does not add a linear-light color pipeline. Quantization across levels can
+introduce approximately one display-code level of mean drift.
+
+Retained levels are bounded to 64 MiB, plus one native in-flight/result target
+of at most 64 MiB. Source replacement can retain one old shared source until the
+current native scaling stage returns. Native scaling is canceled at stage
+boundaries; it is not forcibly interrupted. Original display storage and Qt's
+small scaling tables are outside that cache allowance.
+
+Reproduce with an unchanged public Matplotlib `grace_hopper.jpg` fixture:
+
+```powershell
+$env:QT_QPA_PLATFORM = 'offscreen'
+.\.venv\Scripts\python.exe scripts/benchmark_minification.py --photo C:\Fixtures\grace_hopper.jpg --sizes 3840x2160 7680x4320 --scales 0.125 0.37 --repeats 3
+```
+
+The script refuses a non-offscreen platform. Optional 16K stress is separate
+(`--include-16k`) and was not part of these measurements.
+
+## Large-image thumbnails and embedded editing follow-up
+
+The same Windows host ran a separate headless matrix after the large-raster
+fix. Each source helper ran with the production envelope: one process, 768 MiB
+committed-memory limit, ten seconds, and no Qt import. The source helper used
+the base Python interpreter directly with the pinned project wheels; Windows'
+venv redirector would create an extra process and is unsuitable for this
+single-process harness. This is source validation, not a new frozen bundle.
+
+| Source | 256-edge output | Worker time | Peak process commit |
+|---|---:|---:|---:|
+| Synthetic progressive JPEG, 7680x4320 | 256x144 | 0.37 s | 208 MiB |
+| Synthetic PNG, 7680x4320 | 256x144 | 0.25 s | 145 MiB |
+| Synthetic RLE HDR, 7680x4320 | 256x144 | 0.82 s | 23 MiB |
+| Synthetic ZIP HALF Y EXR, 7680x4320 | 256x144 | 0.32 s | 24 MiB |
+| Synthetic progressive JPEG, 8192x8192 | 256x256 | 0.53 s | 404 MiB |
+| Synthetic PNG, 8192x8192 | 256x256 | 0.29 s | 276 MiB |
+| Synthetic RLE HDR, 8192x8192 | 256x256 | 1.07 s | 24 MiB |
+| Synthetic ZIP HALF Y EXR, 8192x8192 | 256x256 | 0.31 s | 25 MiB |
+| Explicit local progressive 4:4:4 JPEG, 8736x11648 | 192x256 | 0.66 s | 605 MiB |
+
+These are single requests on compressible synthetic fixtures and one explicit
+local diagnostic file, not worst-case bounds for arbitrary 8K content. Source
+hashes were unchanged. The private helper now caps BLAS/OpenMP worker pools in
+its own process before NumPy import; HDR/EXR peak commit dropped from roughly
+763-764 MiB to 23-25 MiB for these requests. System environment settings were
+not changed. JPEG progressive coefficient storage remains significant even
+with native 1/8 spatial decoding, so it has its own pre-load workspace guard.
+
+A direct class-factory call to the currently installed 0.1.3-directory DLL
+succeeded for standard-8K JPEG/PNG and both HDR/EXR sizes, but failed with
+HRESULT 0x8007042b for square-8K JPEG/PNG and the 101.8-MP JPEG. No registration,
+Explorer cache API, Explorer restart, or global cache reset was performed.
+Source changes cannot update that installed helper or establish Explorer-cache
+behavior. A future authorized component update needs its own frozen validation.
+
+The explicit 8736x11648 file also entered the main-window editor in offscreen
+mode, retaining the full-resolution source and producing a 1095x1461 preview;
+cancel returned to viewing with unchanged file bytes. Snapshot preparation was
+about 0.52 seconds in that single probe. Automated synthetic tests cover embedded
+save/cancel, dirty-exit and saving guards, stale callbacks, repeated entry,
+window/maximized state, manual zoom/pan, and three languages at 800x560.

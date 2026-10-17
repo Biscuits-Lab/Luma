@@ -17,7 +17,18 @@ from typing import Callable
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from .decoders import MAX_DIMENSION, MAX_EXR_PIXELS
+from .decoders import MAX_DIMENSION
+
+MAX_EDITOR_PIXELS = 128_000_000
+MAX_EDITOR_SOURCE_BYTES = 512 * 1024 * 1024
+MAX_EDITOR_RENDER_BYTES = 3 * 1024 * 1024 * 1024
+
+
+def check_editor_size(width, height):
+    if (not 0 < width <= MAX_DIMENSION or not 0 < height <= MAX_DIMENSION
+            or width * height > MAX_EDITOR_PIXELS
+            or width * height * 4 > MAX_EDITOR_SOURCE_BYTES):
+        raise ValueError('Editor image exceeds the bounded RGBA8 source limit.')
 
 PREVIEW_EDGE = 1600
 PREVIEW_PIXELS = 1_600_000
@@ -349,10 +360,15 @@ def _draw_strokes(image, strokes, state, source_size, cancelled=None):
 def render(source: Image.Image, state: EditState, *, preview=False, include_crop=True, cancelled=None) -> Image.Image:
     """Render RGBA without mutating source; geometry uses original pixel counts."""
     validate_state(state)
-    if source.mode != 'RGBA' or source.width * source.height > MAX_EXR_PIXELS or max(source.size) > MAX_DIMENSION:
-        raise ValueError('Editor needs an RGBA image within the viewer safety limit.')
+    if source.mode != 'RGBA':
+        raise ValueError('Editor needs an RGBA image.')
+    check_editor_size(*source.size)
     _check(cancelled)
     size = bounded_size(source.size) if preview else source.size
+    # Include the original plus conservative transform/color/annotation surfaces.
+    # Strip color workspaces remain bounded independently of total image height.
+    if source.width * source.height * 4 + size[0] * size[1] * 4 * 5 > MAX_EDITOR_RENDER_BYTES:
+        raise ValueError('Editor operation exceeds the render memory budget.')
     image = source.resize(size, Image.Resampling.LANCZOS) if size != source.size else source.copy()
     turns = state.turns % 4
     if turns:

@@ -6,6 +6,18 @@ An extension identifies a candidate file, not a promise that every variant can d
 
 Pillow handles common raster formats, including JPEG, PNG, TIFF, WebP, BMP, GIF, TGA and DDS where supported by the pinned Pillow wheel. Static viewing uses one frame/page; this is not a GIF animation player or a multipage document viewer. Embedded EXIF orientation is applied where supported by the decoder. Display pixels are prepared for the viewer; high-bit-depth source data is not an editing or export buffer.
 
+### Large photographs
+
+JPEG photographs have a separate full-resolution allowance of 128,000,000
+pixels, selected from the decoded format rather than the filename extension.
+Other ordinary raster formats retain the 64,000,000-pixel ceiling. Both limits
+are checked before pixel loading, alongside the 32,768-pixel side and 1.5 GiB
+decoded-buffer limits. Pillow's generic decompression warning is handled locally;
+its global limits are unchanged. A 100 MP photograph needs roughly 400 MiB per
+RGBA8 surface, with additional decoder, display and temporary storage, and may
+still fail cleanly if the machine cannot allocate enough memory. JPEGs are not
+downsampled during decoding; actual-pixel viewing retains original detail.
+
 ### TGA
 
 TGA is decoded through Pillow, including variants supported by its TGA plugin. Treat an alpha channel according to the file's actual data; not every TGA uses alpha. Production TGA variants should be represented in the acceptance corpus.

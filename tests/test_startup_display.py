@@ -100,11 +100,13 @@ def test_slow_initial_decode_stays_visible_without_welcome(qapp, tmp_path):
         assert window.isVisible()
         assert window.stack.currentWidget() is window.canvas
         assert counter.paints == 0
-        assert 'Loading slow.png' in window.toast.text()
+        wait_for(qapp, lambda: window.loading_indicator.isVisible())
+        assert window.loading_indicator.active_token == window._load_token
         release.set()
         wait_for(qapp, lambda: window.displayed_path == image)
         assert counter.paints == 0
         assert not window.cancel_button.isVisible()
+        assert window.loading_indicator.isHidden()
     finally:
         release.set()
         window.close()

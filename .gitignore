@@ -1,4 +1,5 @@
 .venv/
+.venv-preview/
 .venv-build/
 __pycache__/
 *.py[cod]
@@ -11,3 +12,4 @@ artifacts/
 .DS_Store
 Thumbs.db
 validation/
+/build-test-*.log

@@ -251,9 +251,10 @@ def test_headless_entry_dispatches_without_importing_qt(tmp_path):
     source.write_bytes(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n" + bytes([128, 64, 32, 129]) * 2)
     output.write_bytes(b"")
     code = (
-        "import sys; from luma.__main__ import main; "
+        "import sys,os; from luma.__main__ import main; "
         "result=main(sys.argv[1:]); "
         "assert not any(k.startswith('PySide6') for k in sys.modules); "
+        "assert os.environ['OPENBLAS_NUM_THREADS']=='1'; "
         "raise SystemExit(result)"
     )
     subprocess.run([sys.executable, "-c", code, "--thumbnail-worker", "raster",
@@ -285,3 +286,64 @@ def test_generic_nonraw_tagged_tiff_retains_pillow_fallback(tmp_path, monkeypatc
         raise rawpy.LibRawFileUnsupportedError()
     monkeypatch.setattr(thumbnails, "_raw", unsupported)
     assert thumbnails.generate_thumbnail(path, "raster", 32).size == (16, 12)
+
+
+@pytest.mark.parametrize('format', ['PNG', 'JPEG'])
+def test_raster_extended_limits_are_format_specific_and_source_is_unchanged(tmp_path, monkeypatch, format):
+    monkeypatch.setattr(thumbnails, 'MAX_RASTER_PIXELS', 400)
+    monkeypatch.setattr(thumbnails, 'MAX_JPEG_PIXELS', 500)
+    monkeypatch.setattr(Image, 'MAX_IMAGE_PIXELS', 250)
+    path = tmp_path / 'input.png'
+    Image.new('RGB', (20, 20), 'orange').save(path, format=format, progressive=True)
+    before = path.read_bytes()
+    assert thumbnails.generate_thumbnail(path, 'raster', 8).size == (8, 8)
+    assert path.read_bytes() == before
+    with pytest.warns(Image.DecompressionBombWarning):
+        with Image.open(path):
+            pass
+    monkeypatch.setattr(thumbnails, 'MAX_RASTER_PIXELS', 399)
+    if format == 'JPEG':
+        assert thumbnails.generate_thumbnail(path, 'raster', 8).size == (8, 8)
+    else:
+        with pytest.raises(ValueError, match='limits'):
+            thumbnails.generate_thumbnail(path, 'raster', 8)
+
+
+def test_progressive_jpeg_reduces_before_load_and_retains_workspace_guard(tmp_path, monkeypatch):
+    from PIL import JpegImagePlugin
+    path = tmp_path / 'input.png'
+    Image.new('RGB', (256, 128), 'orange').save(path, format='JPEG', progressive=True, subsampling=0)
+    original = JpegImagePlugin.JpegImageFile.load
+    sizes = []
+    def tracked(self, *args, **kwargs):
+        sizes.append(self.size)
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(JpegImagePlugin.JpegImageFile, 'load', tracked)
+    assert thumbnails.generate_thumbnail(path, 'raster', 16).size == (16, 8)
+    assert sizes and max(w*h for w, h in sizes) <= 32*16
+    sizes.clear()
+    monkeypatch.setattr(thumbnails, 'MAX_JPEG_WORKSPACE_BYTES', 1024)
+    with pytest.raises(ValueError, match='workspace'):
+        thumbnails.generate_thumbnail(path, 'raster', 16)
+    assert sizes == []
+
+
+def test_raster_memory_guard_runs_before_decode(tmp_path, monkeypatch):
+    path = tmp_path / 'input.png'
+    Image.new('RGB', (20, 20), 'orange').save(path)
+    monkeypatch.setattr(thumbnails, 'MAX_RASTER_DECODE_BYTES', 1599)
+    with patch.object(Image.Image, 'load', side_effect=AssertionError('must reject before pixel loading')):
+        with pytest.raises(ValueError, match='memory'):
+            thumbnails.generate_thumbnail(path, 'raster', 8)
+
+
+def test_filmstrip_never_changes_concurrent_viewer_decoder_limits(tmp_path, monkeypatch):
+    from luma import decoders
+    from luma.workers import thumbnail_batch
+    path = tmp_path / 'high-precision.tiff'
+    Image.fromarray(np.arange(400, dtype=np.uint16).reshape(20, 20)).save(path)
+    limits = decoders.MAX_PIXELS, decoders.MAX_DECODE_BYTES, decoders.MAX_FILE_BYTES
+    monkeypatch.setattr(thumbnails, '_linear_or_high_precision', lambda *a: pytest.fail('private process policy must not run in filmstrip thread'))
+    result = thumbnail_batch([path], lambda: False)
+    assert result[str(path)][0] == (20, 20)
+    assert (decoders.MAX_PIXELS, decoders.MAX_DECODE_BYTES, decoders.MAX_FILE_BYTES) == limits

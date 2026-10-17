@@ -1,7 +1,9 @@
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QLabel
 from luma.chrome import resize_edges
 from luma.app import ViewerWindow
+from luma.i18n import tr
 from PySide6.QtGui import QImage
 
 
@@ -20,9 +22,13 @@ def test_custom_titlebar_rotation_and_window_states(qapp):
     assert win.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert win.titlebar.height() == 34
     assert win.viewbar.height() == 36
-    assert win.info_button.geometry().left() > win.status_label.geometry().right()
-    assert win.info_button.geometry().left() - win.status_label.geometry().right() < 12
-    assert win.info_button.geometry().right() < win.width() // 2
+    assert win.stack.currentWidget() is win.welcome
+    assert not win.viewbar.isVisible()
+    assert not any(control.isVisible() for control in
+                   (win.rotate_button, win.edit_button, win.delete_button, win.more_button))
+    welcome_texts = [label.text() for label in win.welcome.findChildren(QLabel)]
+    assert tr('Room for the image') not in welcome_texts
+    assert not any('JPG' in text for text in welcome_texts)
     assert win.maximize_button.iconSize().width() == 17
     assert all(control.iconSize().width() == 20 for control in (win.rotate_button, win.delete_button))
     assert win.more_button.iconSize().width() == 17
@@ -36,6 +42,12 @@ def test_custom_titlebar_rotation_and_window_states(qapp):
     image = QImage(12, 8, QImage.Format.Format_RGBA8888)
     image.fill(Qt.GlobalColor.red)
     win.canvas.set_image(image)
+    win._set_controls(True)
+    qapp.processEvents()
+    assert win.viewbar.isVisible()
+    assert win.info_button.geometry().left() > win.status_label.geometry().right()
+    assert win.info_button.geometry().left() - win.status_label.geometry().right() < 12
+    assert win.info_button.geometry().right() < win.width() // 2
     fit_scale = win.canvas.transform().m11()
     win.zoom_combo.menu().actions()[3].trigger()
     assert abs(win.canvas.transform().m11() / fit_scale - 2) < .001

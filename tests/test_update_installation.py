@@ -38,8 +38,20 @@ def stable_pointer(executable):
     root = executable.parent.parent.parent
     (root / "Luma.exe").write_bytes(b"MZ-immutable-launcher")
     digest = hashlib.sha256((root / "Luma.exe").read_bytes()).hexdigest()
-    (root / managed_launch.OWNER_NAME).write_text("LUMA-LAUNCHER-1\n" + digest + "\n", encoding="ascii")
+    # This is a byte-exact protocol, not host-native text (CRLF on Windows).
+    (root / managed_launch.OWNER_NAME).write_bytes(b"LUMA-LAUNCHER-1\n" + digest.encode("ascii") + b"\n")
     (root / managed_launch.POINTER_NAME).write_bytes(managed_launch._payload(root, executable.parent.name).pointer())
+
+
+def test_stable_pointer_fixture_uses_exact_protocol_bytes(tmp_path):
+    from luma import managed_launch
+    executable = payload(tmp_path / "Installed Luma")
+    stable_pointer(executable)
+    root = executable.parent.parent.parent
+    digest = hashlib.sha256((root / "Luma.exe").read_bytes()).hexdigest().encode("ascii")
+    assert (root / managed_launch.OWNER_NAME).read_bytes() == b"LUMA-LAUNCHER-1\n" + digest + b"\n"
+    assert b"\r" not in (root / managed_launch.POINTER_NAME).read_bytes()
+    assert managed_launch.read_active_payload(root).executable == executable.resolve(strict=True)
 
 
 def setup_file(root, version="0.1.4"):

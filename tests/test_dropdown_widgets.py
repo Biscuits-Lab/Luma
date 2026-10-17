@@ -251,6 +251,10 @@ def test_settings_shell_fits_small_negative_origin_work_area(qapp, monkeypatch):
 
 @pytest.mark.parametrize('factor,language', [('1', 'en'), ('1.25', 'zh-CN'), ('1.5', 'zh-TW'), ('2', 'zh-CN')])
 def test_fresh_high_dpi_real_popup_capture(tmp_path, factor, language):
+    # Windows already supplies a drive colon. Include one in the POSIX parent
+    # directory too, so restoring an absolute QPA config path fails on Linux.
+    tmp_path = tmp_path / ('capture files' if sys.platform == 'win32' else 'C: capture files')
+    tmp_path.mkdir()
     # Give the offscreen platform a realistic 3K desktop rather than its 800px
     # default. Scaling an 800px physical desktop to 200% otherwise puts half
     # of the viewer's intentionally 800-logical-pixel minimum offscreen.
@@ -258,16 +262,30 @@ def test_fresh_high_dpi_real_popup_capture(tmp_path, factor, language):
     config.write_text(json.dumps({'screens': [{'name': 'QA', 'x': 0, 'y': 0,
         'width': 3200, 'height': 2200, 'logicalDpi': 96, 'logicalBaseDpi': 96, 'dpr': 1.0}]}))
     env = os.environ.copy()
-    env['QT_QPA_PLATFORM'] = f'offscreen:configfile={config}'
+    # Qt splits platform arguments on every ':', including a Windows drive
+    # prefix. Run beside the config and pass only its relative name: the
+    # repository and pytest temp directory can even be on different drives.
+    env['QT_QPA_PLATFORM'] = f'offscreen:configfile={config.name}'
+    root = Path(__file__).resolve().parents[1]
+    env['PYTHONPATH'] = os.pathsep.join(filter(None, (str(root), env.get('PYTHONPATH'))))
+    env['PYTHONFAULTHANDLER'] = '1'
+    env['PYTHONUTF8'] = '1'
     env['QT_SCALE_FACTOR'] = factor
     env['XDG_CACHE_HOME'] = str(tmp_path / 'cache')
     result = subprocess.run([sys.executable, '-m', 'scripts.render_dropdown_preview',
                              '--language', language, '--output', str(tmp_path)],
-                            cwd=Path(__file__).resolve().parents[1], env=env,
-                            capture_output=True, text=True, check=True, timeout=25)
+                            cwd=tmp_path, env=env, capture_output=True,
+                            text=True, encoding='utf-8', timeout=25)
+    assert result.returncode == 0, (
+        f'Capture exited {result.returncode} with {env["QT_QPA_PLATFORM"]!r} '
+        f'at scale {factor}; stdout={result.stdout!r}; stderr={result.stderr!r}')
     record = json.loads(result.stdout)
     assert record['device_pixel_ratio'] == float(factor)
     assert record['platform'] == 'offscreen'
+    assert record['screen']['name'] == 'QA'
+    assert record['screen']['available_geometry'] == [
+        0, 0, round(3200 / float(factor)), round(2200 / float(factor))]
+    assert record['screen']['device_pixel_ratio'] == float(factor)
     for name, widget in record['widgets'].items():
         assert widget['corner_alpha'] == [0, 0, 0, 0], name
         if 'panel_width' in widget:

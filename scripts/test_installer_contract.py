@@ -271,8 +271,12 @@ class InstallerCompilePreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "pyproject.toml").write_text('[project]\nversion = "0.1.3"\n')
-            with patch.object(preflight.subprocess, "run", return_value=types.SimpleNamespace(
-                    returncode=0, stdout="checked", stderr="")) as run:
+            def check_compile_fixture(command, **kwargs):
+                owner = next(value.split("=", 1)[1] for value in command
+                             if value.startswith("/DLauncherOwnerFile="))
+                self.assertEqual(Path(owner).read_bytes(), b"LUMA-LAUNCHER-1\n" + b"0" * 64 + b"\n")
+                return types.SimpleNamespace(returncode=0, stdout="checked", stderr="")
+            with patch.object(preflight.subprocess, "run", side_effect=check_compile_fixture) as run:
                 report = preflight.preflight(root, Path("ISCC.exe"))
             self.assertTrue(report["passed"])
             self.assertEqual(run.call_count, 2)

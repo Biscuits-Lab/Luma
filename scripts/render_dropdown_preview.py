@@ -147,7 +147,11 @@ def capture(language, output):
     settings.close()
     window.close()
     app.processEvents()
+    screen = window.screen()
     result = {'language': language, 'platform': app.platformName(),
+              'screen': {'name': screen.name(),
+                         'available_geometry': list(screen.availableGeometry().getRect()),
+                         'device_pixel_ratio': screen.devicePixelRatio()},
               'device_pixel_ratio': records['footer-zoom']['device_pixel_ratio'],
               'capture': 'Actual Qt widgets; in-window views composite real popup pixels. Only windows-desktop PNGs are native desktop evidence.',
               'screenshots': screenshots, 'widgets': records}

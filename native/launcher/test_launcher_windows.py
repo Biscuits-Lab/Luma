@@ -72,8 +72,14 @@ class Windows:
         u.EnumChildWindows.argtypes = [wintypes.HWND, self.enum_callback, wintypes.LPARAM]
         u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        u.IsWindowVisible.argtypes = [wintypes.HWND]
+        u.IsWindowVisible.restype = wintypes.BOOL
+        u.GetDlgItem.argtypes = [wintypes.HWND, ctypes.c_int]
+        u.GetDlgItem.restype = wintypes.HWND
         u.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        u.PostMessageW.restype = wintypes.BOOL
         self.dialogs = []
+        self.acknowledged_dialogs = set()
 
     def verify_resources(self, executable):
         version = ctypes.WinDLL("version", use_last_error=True)
@@ -142,28 +148,48 @@ class Windows:
             api.CloseHandle(snapshot)
 
     def dismiss_error(self, pid):
-        found = []
+        windows = []
         @self.enum_callback
         def visit(hwnd, _):
+            windows.append(hwnd)
+            return True
+        require(self.user.EnumWindows(visit, 0),
+                f"Could not enumerate launcher error dialogs: {ctypes.get_last_error()}")
+        found = []
+        for hwnd in windows:
+            if (pid, hwnd) in self.acknowledged_dialogs:
+                continue
             owner = wintypes.DWORD()
             self.user.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value != pid or not self.user.IsWindowVisible(hwnd):
+                continue
             title = ctypes.create_unicode_buffer(2048)
             self.user.GetWindowTextW(hwnd, title, len(title))
-            if owner.value != pid or title.value != "Luma could not start":
-                return True
-            texts = []
+            if title.value != "Luma could not start":
+                continue
+            children = []
             @self.enum_callback
             def child(child_hwnd, _):
+                children.append(child_hwnd)
+                return True
+            self.user.EnumChildWindows(hwnd, child, 0)
+            texts = []
+            for child_hwnd in children:
                 text = ctypes.create_unicode_buffer(4096)
                 self.user.GetWindowTextW(child_hwnd, text, len(text))
                 if text.value:
                     texts.append(text.value)
-                return True
-            self.user.EnumChildWindows(hwnd, child, 0)
-            found.append("\n".join(texts))
-            self.user.PostMessageW(hwnd, 0x0111, 1, 0)  # WM_COMMAND, IDOK
-            return True
-        self.user.EnumWindows(visit, 0)
+            message = "\n".join(texts)
+            button = self.user.GetDlgItem(hwnd, 1)  # IDOK, independent of UI locale
+            require(button, f"Launcher error dialog has no OK control: {message}")
+            # A button's WM_COMMAND notification carries its HWND in lParam.
+            # Zero means a menu command and can leave MessageBoxW waiting forever.
+            # Keep assertions outside ctypes callbacks, which swallow exceptions.
+            # https://learn.microsoft.com/en-us/windows/win32/controls/bn-clicked
+            require(self.user.PostMessageW(hwnd, 0x0111, 1, button),  # WM_COMMAND, BN_CLICKED | IDOK
+                    f"Could not acknowledge launcher error dialog: {ctypes.get_last_error()}; {message}")
+            self.acknowledged_dialogs.add((pid, hwnd))
+            found.append(message)
         self.dialogs.extend(found)
         return found
 
@@ -224,7 +250,11 @@ class Fixture:
             if expected is None:
                 require(data is None, f"{label}: invalid installation launched a payload")
                 require(errors and any("No other version was started" in error for error in errors), f"{label}: honest error dialog missing")
-                require(process.wait(timeout=3) == 120, f"{label}: failure exit code missing")
+                try:
+                    result = process.wait(timeout=3)
+                except subprocess.TimeoutExpired as error:
+                    raise AssertionError(f"{label}: launcher did not exit after error dialog acknowledgment; dialogs={errors[-1:]}") from error
+                require(result == 120, f"{label}: failure exit code missing: {result}")
                 self.evidence.append({"case": label, "result": "passed", "exit_code": 120, "error": errors})
                 yield None
             else:
@@ -245,15 +275,18 @@ class Fixture:
                                       "os_parent_pid": os_parent, "cwd": data["cwd"], "argv": data["argv"]})
                 yield data
         finally:
+            failure = sys.exc_info()[1]
             self.api.kernel.SetEvent(event)
             try:
                 result = process.wait(timeout=5)
-                if expected is not None and data is not None:
+                if failure is None and expected is not None and data is not None:
                     require(result == 0, f"{label}: root failed to propagate successful payload exit {result}")
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=3)
-                raise AssertionError(f"{label}: launcher failed to exit after payload")
+                if failure is None:
+                    raise AssertionError(f"{label}: launcher failed to exit after payload")
+                failure.add_note(f"{label}: test-owned launcher was killed after cleanup timed out")
             finally:
                 self.api.kernel.CloseHandle(event)
 
